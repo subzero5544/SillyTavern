@@ -87,6 +87,16 @@ const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 
 /**
+ * Module-scoped Claude caching configuration values.
+ */
+const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
+const enableSystemPromptCache = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
+const cachingAtDepth = (() => {
+    const value = getConfigValue('claude.cachingAtDepth', -1, 'number');
+    return Number.isInteger(value) && value >= 0 ? value : -1;
+})();
+
+/**
  * Cache for cacheable (writing) OpenRouter model IDs.
  * @type {string[]}
  */
@@ -194,12 +204,6 @@ async function sendClaudeRequest(request, response) {
     const apiUrl = new URL(request.body.reverse_proxy || API_CLAUDE).toString();
     const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.CLAUDE);
     const divider = '-'.repeat(process.stdout.columns);
-    const enableSystemPromptCache = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-    let cachingAtDepth = getConfigValue('claude.cachingAtDepth', -1, 'number');
-    // Disabled if not an integer or negative
-    if (!Number.isInteger(cachingAtDepth) || cachingAtDepth < 0) {
-        cachingAtDepth = -1;
-    }
 
     if (!apiKey) {
         console.warn(color.red(`Claude API key is missing.\n${divider}`));
@@ -221,7 +225,6 @@ async function sendClaudeRequest(request, response) {
         const useWebSearch = /^claude-(3-5|3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5)/.test(request.body.model) && Boolean(request.body.enable_web_search);
         const isLimitedSampling = /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5)/.test(request.body.model);
         const useVerbosity = /^claude-(opus-4-5)/.test(request.body.model);
-        const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
         let fixThinkingPrefill = false;
         // Add custom stop sequences
         const stopSequences = [];
@@ -1365,6 +1368,18 @@ async function sendElectronHubRequest(request, response) {
             };
         }
 
+        const isClaude = /^claude-/.test(request.body.model);
+
+        if (Array.isArray(request.body.messages) && isClaude) {
+            if (enableSystemPromptCache) {
+                cachingSystemPromptForOpenRouter(request.body.messages, cacheTTL);
+            }
+
+            if (cachingAtDepth !== -1) {
+                cachingAtDepthForOpenRouterClaude(request.body.messages, cachingAtDepth, cacheTTL);
+            }
+        }
+
         const requestBody = {
             'messages': request.body.messages,
             'model': request.body.model,
@@ -1686,8 +1701,8 @@ router.post('/status', async function (request, statusResponse) {
             headers = {};
             throw new Error('This provider is temporarily disabled.');
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
-            apiUrl = API_MOONSHOT;
-            apiKey = readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
+            apiUrl = new URL(request.body.reverse_proxy || API_MOONSHOT).toString();
+            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.FIREWORKS) {
             apiUrl = API_FIREWORKS;
@@ -2048,6 +2063,8 @@ router.post('/generate', async function (request, response) {
             if (getConfigValue('openai.randomizeUserId', false, 'boolean')) {
                 bodyParams['user'] = uuidv4();
             }
+
+            embedOpenRouterMedia(request.body.messages, { audio: true, video: false });
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENROUTER) {
             apiUrl = 'https://openrouter.ai/api/v1';
             apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER);
@@ -2101,25 +2118,21 @@ router.post('/generate', async function (request, response) {
                 };
             }
 
-            const enableSystemPromptCache = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-            const cachingAtDepth = getConfigValue('claude.cachingAtDepth', -1, 'number');
-            const isClaude3or4 = /anthropic\/claude-(3|opus-4|sonnet-4|haiku-4)/.test(request.body.model);
-            const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
-
+            const isClaude = /^anthropic\/claude/.test(request.body.model);
             const isGemini = /google\/gemini/.test(request.body.model);
             const isCacheableGemini = isGemini && await isOpenRouterModelCacheable(request.body.model);
             const enableGeminiSystemPromptCache = getConfigValue('gemini.enableSystemPromptCache', false, 'boolean');
 
             if (Array.isArray(request.body.messages)) {
-                embedOpenRouterMedia(request.body.messages);
+                embedOpenRouterMedia(request.body.messages, { audio: true, video: true });
                 addOpenRouterSignatures(request.body.messages, request.body.model);
 
-                if (isClaude3or4) {
+                if (isClaude) {
                     if (enableSystemPromptCache) {
                         cachingSystemPromptForOpenRouter(request.body.messages, cacheTTL);
                     }
 
-                    if (Number.isInteger(cachingAtDepth) && cachingAtDepth >= 0) {
+                    if (cachingAtDepth !== -1) {
                         cachingAtDepthForOpenRouterClaude(request.body.messages, cachingAtDepth, cacheTTL);
                     }
                 }
@@ -2149,6 +2162,7 @@ router.post('/generate', async function (request, response) {
 
             mergeObjectWithYaml(bodyParams, request.body.custom_include_body);
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
+            embedOpenRouterMedia(request.body.messages, { audio: true, video: false });
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.PERPLEXITY) {
             apiUrl = API_PERPLEXITY;
             apiKey = readSecret(request.user.directories, SECRET_KEYS.PERPLEXITY);
@@ -2214,10 +2228,9 @@ router.post('/generate', async function (request, response) {
             if (request.body.repetition_penalty !== undefined) {
                 bodyParams['repetition_penalty'] = request.body.repetition_penalty;
             }
-            const enableSystemPromptCache = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-            const isClaude3or4 = /claude-(3|opus-4|sonnet-4|haiku-4)/.test(request.body.model);
-            const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
-            if (enableSystemPromptCache && isClaude3or4) {
+
+            const isClaude = /^claude-/.test(request.body.model);
+            if (enableSystemPromptCache && isClaude) {
                 bodyParams['cache_control'] = {
                     'enabled': true,
                     'ttl': cacheTTL,
@@ -2239,8 +2252,8 @@ router.post('/generate', async function (request, response) {
                 setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema);
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
-            apiUrl = API_MOONSHOT;
-            apiKey = readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
+            apiUrl = new URL(request.body.reverse_proxy || API_MOONSHOT).toString();
+            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
             headers = {};
             bodyParams = {};
             request.body.json_schema
@@ -2255,8 +2268,9 @@ router.post('/generate', async function (request, response) {
             };
             throw new Error('This provider is temporarily disabled.');
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ZAI) {
-            apiUrl = request.body.zai_endpoint === ZAI_ENDPOINT.CODING ? API_ZAI_CODING : API_ZAI_COMMON;
-            apiKey = readSecret(request.user.directories, SECRET_KEYS.ZAI);
+            const defaultApiUrl = request.body.zai_endpoint === ZAI_ENDPOINT.CODING ? API_ZAI_CODING : API_ZAI_COMMON;
+            apiUrl = new URL(request.body.reverse_proxy || defaultApiUrl).toString();
+            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.ZAI);
             headers = {
                 'Accept-Language': 'en-US,en',
             };

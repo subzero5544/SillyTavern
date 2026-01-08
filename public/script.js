@@ -282,6 +282,7 @@ import { AudioPlayer } from './scripts/audio-player.js';
 import { MacroEnvBuilder } from './scripts/macros/engine/MacroEnvBuilder.js';
 import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
+import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -1569,7 +1570,15 @@ export async function deleteMessage(id, swipeDeletionIndex = undefined, askConfi
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
 }
 
-export async function reloadCurrentChat() {
+export const reloadChatMutex = new SimpleMutex(reloadCurrentChatUnsafe);
+export const reloadCurrentChat = reloadChatMutex.update.bind(reloadChatMutex);
+
+/**
+ * Reloads the current chat unsafely, without mutex protection.
+ * Use `reloadCurrentChat` instead to ensure thread safety.
+ * @returns {Promise<void>} A promise that resolves when the chat is reloaded.
+ */
+export async function reloadCurrentChatUnsafe() {
     preserveNeutralChat();
     await clearChat();
     chat.length = 0;
@@ -1610,13 +1619,14 @@ export async function sendTextareaMessage() {
     // "Continue on send" is activated when the user hits "send" (or presses enter) on an empty chat box, and the last
     // message was sent from a character (not the user or the system).
     const textareaText = String($('#send_textarea').val());
+    const lastMessage = chat[chat.length - 1];
     if (power_user.continue_on_send &&
         !hasPendingFileAttachment() &&
         !textareaText &&
         !selected_group &&
         chat.length &&
-        !chat[chat.length - 1]['is_user'] &&
-        !chat[chat.length - 1]['is_system']
+        !lastMessage['is_user'] &&
+        !lastMessage['is_system']
     ) {
         generateType = 'continue';
     }
@@ -2703,6 +2713,20 @@ export function substituteParamsLegacy(content, _name1, _name2, _original, _grou
         });
     }
 
+    // Try to roughly detect experimental macro features to show the onboarding if needed.
+    // This does not have to be 100% accurate, only best effort what we can quickly check.
+    // Only do this if the warning wasn't shown yet, to prevent needless regex checks.
+    if (accountStorage.getItem('slash_command_experimental_engine_warning_shown') !== 'true') {
+        let feature = /** @type {string|null} */ (null);
+        if (/{{\s*if/.test(content)) feature = '{{if}} macro';
+        else if (/{{\s*\//.test(content)) feature = 'scoped macro';
+        else if (/{{\s*[!?~#/]/.test(content)) feature = 'macro flags';
+        else if (/{{\s*[.$]/.test(content)) feature = 'variable shorthands';
+        else if (/\{\{(?:(?!\}\}).)*\{\{(?=[\s\S]*?\}\}[\s\S]*?\}\})/.test(content)) feature = 'nested macro';
+
+        if (feature) void onboardingExperimentalMacroEngine(feature);
+    }
+
     const environment = {};
 
     if (typeof _original === 'string') {
@@ -2816,7 +2840,7 @@ export function substituteParamsLegacy(content, _name1, _name2, _original, _grou
  * @param {string} [options.original] - The original message for {{original}} substitution.
  * @param {string} [options.groupOverride] - The group members list for {{group}} substitution.
  * @param {boolean} [options.replaceCharacterCard=true] - Whether to replace character card macros.
- * @param {Record<string,string|MacroHandler>} [options.dynamicMacros={}] - Additional environment variables as dynamic macros for substitution. Registered as macro functions.
+ * @param {Record<string, import('./scripts/macros/engine/MacroEnv.types.js').DynamicMacroValue>} [options.dynamicMacros={}] - Additional environment variables as dynamic macros for substitution. Registered as macro functions.
  * @param {(x: string) => string} [options.postProcessFn=(x) => x] - Post-processing function for each substituted macro.
  * @returns {string} The string with substituted parameters.
  */
@@ -4168,6 +4192,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         return Promise.resolve();
     }
 
+    const lastMessage = chat[chat.length - 1];
+
     let textareaText;
     if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun) {
         is_send_press = true;
@@ -4175,7 +4201,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         $('#send_textarea').val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
     } else {
         textareaText = '';
-        if (chat.length && chat[chat.length - 1]['is_user']) {
+        if (chat.length && lastMessage['is_user']) {
             //do nothing? why does this check exist?
         }
         else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && chat.length) {
@@ -4189,13 +4215,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
     // Rewrite the generation timer to account for the time passed for all the continuations.
     if (isContinue && chat.length) {
-        const prevFinished = chat[chat.length - 1]['gen_finished'];
-        const prevStarted = chat[chat.length - 1]['gen_started'];
+        const prevFinished = lastMessage['gen_finished'];
+        const prevStarted = lastMessage['gen_started'];
 
         if (prevFinished && prevStarted) {
             const timePassed = Number(prevFinished) - Number(prevStarted);
             generation_started = new Date(Date.now() - timePassed);
-            chat[chat.length - 1]['gen_started'] = generation_started;
+            lastMessage['gen_started'] = generation_started;
         }
     }
 
@@ -6364,18 +6390,20 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature] = arguments;
     }
 
-    if (type != 'append' && type != 'continue' && type != 'appendFinal' && chat.length && (chat[chat.length - 1]['swipe_id'] === undefined ||
-        chat[chat.length - 1]['is_user'])) {
+    const lastMessage = chat[chat.length - 1];
+
+    if (type != 'append' && type != 'continue' && type != 'appendFinal' && chat.length && (lastMessage['swipe_id'] === undefined ||
+        lastMessage['is_user'])) {
         type = 'normal';
     }
 
-    if (chat.length && (!chat[chat.length - 1]['extra'] || typeof chat[chat.length - 1]['extra'] !== 'object')) {
-        chat[chat.length - 1]['extra'] = {};
+    if (chat.length && (!lastMessage['extra'] || typeof lastMessage['extra'] !== 'object')) {
+        lastMessage['extra'] = {};
     }
 
     // Coerce null/undefined to empty string
-    if (chat.length && !chat[chat.length - 1]['extra']['reasoning']) {
-        chat[chat.length - 1]['extra']['reasoning'] = '';
+    if (chat.length && !lastMessage['extra']['reasoning']) {
+        lastMessage['extra']['reasoning'] = '';
     }
 
     if (!reasoning) {
@@ -6385,70 +6413,70 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     let oldMessage = '';
     const generationFinished = new Date();
     if (type === 'swipe') {
-        oldMessage = chat[chat.length - 1]['mes'];
-        chat[chat.length - 1]['swipes'].length++;
-        if (chat[chat.length - 1]['swipe_id'] === chat[chat.length - 1]['swipes'].length - 1) {
-            chat[chat.length - 1]['title'] = title;
-            chat[chat.length - 1]['mes'] = getMessage;
-            chat[chat.length - 1]['gen_started'] = generation_started;
-            chat[chat.length - 1]['gen_finished'] = generationFinished;
-            chat[chat.length - 1]['send_date'] = getMessageTimeStamp();
-            chat[chat.length - 1]['extra']['api'] = getGeneratingApi();
-            chat[chat.length - 1]['extra']['model'] = getGeneratingModel();
-            chat[chat.length - 1]['extra']['reasoning'] = reasoning;
-            chat[chat.length - 1]['extra']['reasoning_duration'] = null;
-            chat[chat.length - 1]['extra']['reasoning_signature'] = reasoningSignature;
-            await processImageAttachment(chat[chat.length - 1], { imageUrls });
+        oldMessage = lastMessage['mes'];
+        lastMessage['swipes'].length++;
+        if (lastMessage['swipe_id'] === lastMessage['swipes'].length - 1) {
+            lastMessage['title'] = title;
+            lastMessage['mes'] = getMessage;
+            lastMessage['gen_started'] = generation_started;
+            lastMessage['gen_finished'] = generationFinished;
+            lastMessage['send_date'] = getMessageTimeStamp();
+            lastMessage['extra']['api'] = getGeneratingApi();
+            lastMessage['extra']['model'] = getGeneratingModel();
+            lastMessage['extra']['reasoning'] = reasoning;
+            lastMessage['extra']['reasoning_duration'] = null;
+            lastMessage['extra']['reasoning_signature'] = reasoningSignature;
+            await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
-                const tokenCountText = (reasoning || '') + chat[chat.length - 1]['mes'];
-                chat[chat.length - 1]['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
+                const tokenCountText = (reasoning || '') + lastMessage['mes'];
+                lastMessage['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
             }
             const chat_id = (chat.length - 1);
             !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
             addOneMessage(chat[chat_id], { type: 'swipe' });
             !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
         } else {
-            chat[chat.length - 1]['mes'] = getMessage;
+            lastMessage['mes'] = getMessage;
         }
     } else if (type === 'append' || type === 'continue') {
         console.debug('Trying to append.');
-        oldMessage = chat[chat.length - 1]['mes'];
-        chat[chat.length - 1]['title'] = title;
-        chat[chat.length - 1]['mes'] += getMessage;
-        chat[chat.length - 1]['gen_started'] = generation_started;
-        chat[chat.length - 1]['gen_finished'] = generationFinished;
-        chat[chat.length - 1]['send_date'] = getMessageTimeStamp();
-        chat[chat.length - 1]['extra']['api'] = getGeneratingApi();
-        chat[chat.length - 1]['extra']['model'] = getGeneratingModel();
-        chat[chat.length - 1]['extra']['reasoning'] = reasoning;
-        chat[chat.length - 1]['extra']['reasoning_duration'] = null;
-        chat[chat.length - 1]['extra']['reasoning_signature'] = reasoningSignature;
-        await processImageAttachment(chat[chat.length - 1], { imageUrls });
+        oldMessage = lastMessage['mes'];
+        lastMessage['title'] = title;
+        lastMessage['mes'] += getMessage;
+        lastMessage['gen_started'] = generation_started;
+        lastMessage['gen_finished'] = generationFinished;
+        lastMessage['send_date'] = getMessageTimeStamp();
+        lastMessage['extra']['api'] = getGeneratingApi();
+        lastMessage['extra']['model'] = getGeneratingModel();
+        lastMessage['extra']['reasoning'] = reasoning;
+        lastMessage['extra']['reasoning_duration'] = null;
+        lastMessage['extra']['reasoning_signature'] = reasoningSignature;
+        await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + chat[chat.length - 1]['mes'];
-            chat[chat.length - 1]['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
+            const tokenCountText = (reasoning || '') + lastMessage['mes'];
+            lastMessage['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
         }
         const chat_id = (chat.length - 1);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id], { type: 'swipe' });
         !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
     } else if (type === 'appendFinal') {
-        oldMessage = chat[chat.length - 1]['mes'];
+        oldMessage = lastMessage['mes'];
         console.debug('Trying to appendFinal.');
-        chat[chat.length - 1]['title'] = title;
-        chat[chat.length - 1]['mes'] = getMessage;
-        chat[chat.length - 1]['gen_started'] = generation_started;
-        chat[chat.length - 1]['gen_finished'] = generationFinished;
-        chat[chat.length - 1]['send_date'] = getMessageTimeStamp();
-        chat[chat.length - 1]['extra']['api'] = getGeneratingApi();
-        chat[chat.length - 1]['extra']['model'] = getGeneratingModel();
-        chat[chat.length - 1]['extra']['reasoning'] += reasoning;
-        chat[chat.length - 1]['extra']['reasoning_signature'] = reasoningSignature;
-        await processImageAttachment(chat[chat.length - 1], { imageUrls });
+        lastMessage['title'] = title;
+        lastMessage['mes'] = getMessage;
+        lastMessage['gen_started'] = generation_started;
+        lastMessage['gen_finished'] = generationFinished;
+        lastMessage['send_date'] = getMessageTimeStamp();
+        lastMessage['extra']['api'] = getGeneratingApi();
+        lastMessage['extra']['model'] = getGeneratingModel();
+        lastMessage['extra']['reasoning'] += reasoning;
+        lastMessage['extra']['reasoning_signature'] = reasoningSignature;
+        await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + chat[chat.length - 1]['mes'];
-            chat[chat.length - 1]['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
+            const tokenCountText = (reasoning || '') + lastMessage['mes'];
+            lastMessage['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
         }
         const chat_id = (chat.length - 1);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
@@ -6457,27 +6485,28 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
 
     } else {
         console.debug('entering chat update routine for non-swipe post');
-        chat[chat.length] = {};
-        chat[chat.length - 1]['extra'] = {};
-        chat[chat.length - 1]['name'] = name2;
-        chat[chat.length - 1]['is_user'] = false;
-        chat[chat.length - 1]['send_date'] = getMessageTimeStamp();
-        chat[chat.length - 1]['extra']['api'] = getGeneratingApi();
-        chat[chat.length - 1]['extra']['model'] = getGeneratingModel();
-        chat[chat.length - 1]['extra']['reasoning'] = reasoning;
-        chat[chat.length - 1]['extra']['reasoning_duration'] = null;
-        chat[chat.length - 1]['extra']['reasoning_signature'] = reasoningSignature;
+        const newMessage = {};
+        chat.push(newMessage);
+        newMessage['extra'] = {};
+        newMessage['name'] = name2;
+        newMessage['is_user'] = false;
+        newMessage['send_date'] = getMessageTimeStamp();
+        newMessage['extra']['api'] = getGeneratingApi();
+        newMessage['extra']['model'] = getGeneratingModel();
+        newMessage['extra']['reasoning'] = reasoning;
+        newMessage['extra']['reasoning_duration'] = null;
+        newMessage['extra']['reasoning_signature'] = reasoningSignature;
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
         }
-        chat[chat.length - 1]['mes'] = getMessage;
-        chat[chat.length - 1]['title'] = title;
-        chat[chat.length - 1]['gen_started'] = generation_started;
-        chat[chat.length - 1]['gen_finished'] = generationFinished;
+        newMessage['mes'] = getMessage;
+        newMessage['title'] = title;
+        newMessage['gen_started'] = generation_started;
+        newMessage['gen_finished'] = generationFinished;
 
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + chat[chat.length - 1]['mes'];
-            chat[chat.length - 1]['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
+            const tokenCountText = (reasoning || '') + newMessage['mes'];
+            newMessage['extra']['token_count'] = await getTokenCountAsync(tokenCountText, 0);
         }
 
         if (selected_group) {
@@ -6486,12 +6515,12 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             if (characters[this_chid].avatar != 'none') {
                 avatarImg = getThumbnailUrl('avatar', characters[this_chid].avatar);
             }
-            chat[chat.length - 1]['force_avatar'] = avatarImg;
-            chat[chat.length - 1]['original_avatar'] = characters[this_chid].avatar;
-            chat[chat.length - 1]['extra']['gen_id'] = group_generation_id;
+            newMessage['force_avatar'] = avatarImg;
+            newMessage['original_avatar'] = characters[this_chid].avatar;
+            newMessage['extra']['gen_id'] = group_generation_id;
         }
 
-        await processImageAttachment(chat[chat.length - 1], { imageUrls });
+        await processImageAttachment(newMessage, { imageUrls });
         const chat_id = (chat.length - 1);
 
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
@@ -6515,12 +6544,12 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     } else {
         item['swipe_id'] = 0;
         item['swipes'] = [];
-        item['swipes'][0] = chat[chat.length - 1]['mes'];
+        item['swipes'][0] = item['mes'];
         item['swipe_info'][0] = {
-            send_date: chat[chat.length - 1]['send_date'],
-            gen_started: chat[chat.length - 1]['gen_started'],
-            gen_finished: chat[chat.length - 1]['gen_finished'],
-            extra: structuredClone(chat[chat.length - 1]['extra']),
+            send_date: item['send_date'],
+            gen_started: item['gen_started'],
+            gen_finished: item['gen_finished'],
+            extra: structuredClone(item['extra']),
         };
     }
 
@@ -6541,7 +6570,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         item.swipe_info.push(...swipeInfoArray);
     }
 
-    statMesProcess(chat[chat.length - 1], type, characters, this_chid, oldMessage);
+    statMesProcess(item, type, characters, this_chid, oldMessage);
     return { type, getMessage };
 }
 
@@ -12012,7 +12041,9 @@ jQuery(async function () {
             }
             if (this_edit_mes_id === undefined && $('#mes_stop').is(':visible')) {
                 $('#mes_stop').trigger('click');
-                if (chat.length && Array.isArray(chat[chat.length - 1].swipes) && chat[chat.length - 1].swipe_id == chat[chat.length - 1].swipes.length) {
+                if (chat.length === 0) return;
+                const lastMessage = chat[chat.length - 1];
+                if (Array.isArray(lastMessage.swipes) && lastMessage.swipe_id == lastMessage.swipes.length) {
                     $('.last_mes .swipe_left').trigger('click');
                 }
             }
