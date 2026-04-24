@@ -15,6 +15,7 @@
 @import url(css/secrets.css);
 @import url(css/backgrounds.css);
 @import url(css/chat-backups.css);
+@import url(css/streaming-display.css);
 
 :root {
     interpolate-size: allow-keywords;
@@ -318,7 +319,7 @@ input[type='checkbox']:focus-visible {
 .dragover {
     filter: brightness(1.1) saturate(1.0);
     outline: 3px dashed var(--SmartThemeBorderColor);
-    animation: pulse 0.5s infinite alternate;
+    animation: pulse var(--animation-duration-3x) infinite alternate;
 }
 
 .dragover.no_animation {
@@ -1278,6 +1279,29 @@ body .panelControlBar {
     pointer-events: auto;
 }
 
+.swipes-counter.swipe-picker-enabled {
+    cursor: pointer;
+}
+
+.swipes-counter.swipe-picker-enabled:hover,
+.swipes-counter.swipe-picker-enabled:focus-visible {
+    opacity: 0.7;
+}
+
+.swipe_picker_header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.swipe_picker_popup .popup-body,
+.swipe_picker_popup .popup-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
 
 body.swipeAllMessages .mes:not(.last_mes) .swipes-counter {
     /* Avoid expensive DOM queries */
@@ -1584,6 +1608,10 @@ body.hideAllSwipeButtons :is(.swipe_left, .swipe_right),
     opacity: 0.4;
 }
 
+.mes_text.inline_media:not(:has(.edit_textarea)) {
+    display: none;
+}
+
 br {
     display: block;
     margin: 2px 0;
@@ -1726,6 +1754,13 @@ button {
             width: 50vw;
         }
 
+        /* Small style variant for macro autocomplete (33vw, max 700px) */
+        &[data-macros-autocomplete-style="small"] .autoComplete {
+            width: 33vw;
+            max-width: 700px;
+            min-width: 250px;
+        }
+
         &:after {
             content: "";
             flex: 1 1 0;
@@ -1776,6 +1811,38 @@ button {
         .autoComplete-details {
             max-height: unset;
             width: 25vw;
+        }
+
+        /* Small style variant for macro autocomplete (33vw, max 700px) */
+        &[data-macros-autocomplete-style="small"] .autoComplete-details {
+            width: 33vw;
+            max-width: 700px;
+            min-width: 250px;
+        }
+
+        &[data-macros-autocomplete-style="small"] {
+            &.left {
+                &:before {
+                    flex: 0 1 calc(var(--targetOffset) * 1px - 33vw);
+                }
+
+                &:after {
+                    flex: 1 0 auto;
+                    max-width: 33vw;
+                }
+            }
+
+            &.right {
+                &:before {
+                    flex: 0 0 calc(var(--targetOffset) * 1px + 33vw);
+                }
+            }
+
+            &.full {
+                .autoComplete-details {
+                    max-width: 33vw;
+                }
+            }
         }
 
         &.left {
@@ -4006,7 +4073,7 @@ grammarly-extension {
 
 
 /* Override toastr default styles */
-body>#toast-container {
+body #toast-container {
     margin-top: var(--topBarBlockSize);
 }
 
@@ -4017,6 +4084,10 @@ body #toast-container>div {
     padding: 10px 10px 10px 50px;
     font-size: calc(var(--mainFontSize) * 0.95);
     width: 300px;
+}
+
+body #toast-container .toast.toast-non-interactable {
+    cursor: default;
 }
 
 body #toast-container .toast-success {
@@ -4754,13 +4825,15 @@ h5 {
     cursor: pointer;
 }
 
-#select_chat_div {
+#select_chat_div,
+.swipe_picker_div {
     padding: 0;
     height: 100%;
     overflow-y: auto;
 }
 
-#select_chat_div hr {
+#select_chat_div hr,
+.swipe_picker_div hr {
     margin: 0;
 }
 
@@ -4768,19 +4841,70 @@ h5 {
     cursor: pointer;
 }
 
-.select_chat_block {
+.select_chat_block,
+.swipe_picker_block {
     border-radius: 5px;
     margin-top: 5px;
     border: 1px solid var(--SmartThemeBorderColor);
     padding: 5px 7px;
 }
 
-.select_chat_block:hover {
+.select_chat_block:hover,
+.swipe_picker_block:hover {
     background-color: var(--white30a);
 }
 
-.select_chat_block[highlight] {
+.select_chat_block[highlight],
+.swipe_picker_block[highlight] {
     background-color: var(--cobalt30a);
+}
+
+.swipe_picker_block {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.swipe_picker_block .select_chat_block_mes {
+    text-align: left;
+}
+
+.swipe_picker_block .select_chat_actions {
+    align-items: baseline;
+}
+
+.swipe_picker_expand_toggle {
+    display: none !important;
+}
+
+.swipe_picker_block:has(.swipe_picker_expand_toggle:checked) .select_chat_block_mes {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.swipe_picker_expand_label {
+    cursor: pointer;
+    opacity: 0.5;
+}
+
+.swipe_picker_expand_label:hover {
+    opacity: 1;
+}
+
+.swipe_picker_copy {
+    cursor: pointer;
+    opacity: 0.5;
+}
+
+.swipe_picker_copy:hover {
+    opacity: 1;
+}
+
+.swipe_picker_block:has(.swipe_picker_expand_toggle:checked) .swipe_picker_expand_label {
+    transform: rotate(180deg);
 }
 
 .select_chat_block .avatar {
@@ -4819,11 +4943,25 @@ h5 {
 }
 
 
-.PastChat_cross:hover {
+.PastChat_cross:not(.disabled):hover {
     color: red;
     filter: drop-shadow(0 0 2px red);
     -webkit-animation: infinite-spinning 1s ease-out 0s infinite normal;
     animation: infinite-spinning 1s ease-out 0s infinite normal;
+}
+
+.swipe_picker_delete.disabled {
+    cursor: default !important;
+    opacity: 0.2;
+}
+
+.swipe_picker_delete.disabled:hover {
+    cursor: default !important;
+    color: inherit;
+    filter: none;
+    -webkit-animation: none;
+    animation: none;
+    opacity: 0.2 !important;
 }
 
 #export_character_div {
@@ -6005,6 +6143,11 @@ body:not(.movingUI) .drawer-content.maximized {
     width: fit-content;
     border-radius: 10px;
     outline: 1px solid var(--SmartThemeBorderColor);
+    transition: filter var(--animation-duration-2x) ease-in-out;
+}
+
+#show_more_messages:hover {
+    filter: brightness(1.25);
 }
 
 .draggable img {
@@ -6331,4 +6474,27 @@ body:not(.movingUI) .drawer-content.maximized {
 .info-block.error {
     border-color: var(--error-color, #e87f7f);
     background-color: rgba(241, 163, 163, 0.2);
+}
+
+@media (prefers-contrast: more) {
+    :root {
+        --interactable-outline-color: CanvasText;
+        --interactable-outline-color-faint: CanvasText;
+    }
+
+    .interactable:focus-visible,
+    select:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+        outline-width: 2px;
+    }
+
+    .mes {
+        border: 2px solid var(--SmartThemeBorderColor);
+    }
+
+    .menu_button,
+    .popup {
+        border-width: 2px;
+    }
 }

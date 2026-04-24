@@ -3,6 +3,7 @@ import { getContext, getApiUrl, doExtrasFetch, extension_settings, modules, rend
 import { appendMediaToMessage, chat_metadata, eventSource, event_types, getRequestHeaders, saveChatConditional, saveSettingsDebounced, substituteParamsExtended } from '../../../script.js';
 import { getMessageTimeStamp } from '../../RossAscends-mods.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
+import { oai_settings } from '../../openai.js';
 import { getMultimodalCaption } from '../shared.js';
 import { textgen_types, textgenerationwebui_settings } from '../../textgen-settings.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
@@ -68,8 +69,7 @@ async function setImageIcon() {
         const sendButton = $('#send_picture .extensionsMenuExtensionButton');
         sendButton.addClass('fa-image');
         sendButton.removeClass('fa-hourglass-half');
-    }
-    catch (error) {
+    } catch (error) {
         console.log(error);
     }
 }
@@ -82,8 +82,7 @@ async function setSpinnerIcon() {
         const sendButton = $('#send_picture .extensionsMenuExtensionButton');
         sendButton.removeClass('fa-image');
         sendButton.addClass('fa-hourglass-half');
-    }
-    catch (error) {
+    } catch (error) {
         console.log(error);
     }
 }
@@ -204,7 +203,7 @@ async function sendCaptionedMessage(caption, image, mimeType) {
             inline_image: !!extension_settings.caption.show_in_chat,
         },
     };
-    chat_metadata['tainted'] = true;
+    chat_metadata.tainted = true;
     context.chat.push(message);
     const messageId = context.chat.length - 1;
     await eventSource.emit(event_types.MESSAGE_SENT, messageId);
@@ -376,14 +375,12 @@ async function getCaptionForFile(file, prompt, quiet) {
             await sendCaptionedMessage(caption, imagePath, file.type);
         }
         return caption;
-    }
-    catch (error) {
+    } catch (error) {
         const errorMessage = error.message || 'Unknown error';
         toastr.error(errorMessage, 'Failed to caption');
         console.error(error);
         return '';
-    }
-    finally {
+    } finally {
         setImageIcon();
     }
 }
@@ -458,7 +455,7 @@ function isVideoCaptioningAvailable() {
     return ['google', 'vertexai', 'zai'].includes(extension_settings.caption.multimodal_api);
 }
 
-jQuery(async function () {
+export async function init() {
     function addSendPictureButton() {
         const sendButton = $(`
         <div id="send_picture" class="list-group-item flex-container flexGap5">
@@ -507,6 +504,8 @@ jQuery(async function () {
                         'nanogpt': SECRET_KEYS.NANOGPT,
                         'chutes': SECRET_KEYS.CHUTES,
                         'electronhub': SECRET_KEYS.ELECTRONHUB,
+                        'pollinations': SECRET_KEYS.POLLINATIONS,
+                        'workers_ai': SECRET_KEYS.WORKERS_AI,
                     };
 
                     if (chatCompletionApis[api] && secret_state[chatCompletionApis[api]]) {
@@ -530,7 +529,7 @@ jQuery(async function () {
                     }
 
                     // Custom API doesn't need additional checks
-                    if (api === 'custom' || api === 'pollinations') {
+                    if (api === 'custom') {
                         return true;
                     }
                 }
@@ -583,7 +582,7 @@ jQuery(async function () {
     }
 
     async function addRemoteEndpointModels() {
-        async function processEndpoint(api, url) {
+        async function processEndpoint(api, url, additionalParams = {}) {
             const dropdown = document.getElementById('caption_multimodal_model');
             if (!(dropdown instanceof HTMLSelectElement)) {
                 return;
@@ -594,7 +593,8 @@ jQuery(async function () {
             const options = Array.from(dropdown.options);
             const response = await fetch(url, {
                 method: 'POST',
-                headers: getRequestHeaders({ omitContentType: true }),
+                headers: getRequestHeaders(),
+                body: JSON.stringify(additionalParams),
             });
             if (!response.ok) {
                 return;
@@ -622,6 +622,8 @@ jQuery(async function () {
         await processEndpoint('electronhub', '/api/backends/chat-completions/multimodal-models/electronhub');
         await processEndpoint('mistral', '/api/backends/chat-completions/multimodal-models/mistral');
         await processEndpoint('xai', '/api/backends/chat-completions/multimodal-models/xai');
+        await processEndpoint('moonshot', '/api/backends/chat-completions/multimodal-models/moonshot');
+        await processEndpoint('workers_ai', '/api/backends/chat-completions/multimodal-models/workers_ai', { workers_ai_account_id: oai_settings.workers_ai_account_id });
     }
 
     await addSettings();
@@ -806,4 +808,4 @@ jQuery(async function () {
     }));
 
     document.body.classList.add('caption');
-});
+}

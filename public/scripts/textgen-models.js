@@ -31,16 +31,18 @@ const OPENROUTER_PROVIDERS = [
     'AI21',
     'AionLabs',
     'Alibaba',
+    'AkashML',
     'Amazon Bedrock',
     'Amazon Nova',
+    'Ambient',
     'Anthropic',
     'Arcee AI',
     'AtlasCloud',
     'Avian',
     'Azure',
+    'Baidu',
     'BaseTen',
     'Black Forest Labs',
-    'BytePlus',
     'Cerebras',
     'Chutes',
     'Cirrascale',
@@ -50,6 +52,7 @@ const OPENROUTER_PROVIDERS = [
     'Crusoe',
     'DeepInfra',
     'DeepSeek',
+    'DekaLLM',
     'FakeProvider',
     'Featherless',
     'Fireworks',
@@ -57,15 +60,18 @@ const OPENROUTER_PROVIDERS = [
     'GMICloud',
     'Google',
     'Google AI Studio',
-    'GoPomelo',
     'Groq',
     'Hyperbolic',
     'Inception',
+    'Inceptron',
     'InferenceNet',
     'Infermatic',
     'Inflection',
+    'Io Net',
+    'Ionstream',
     'Liquid',
     'Mancer 2',
+    'Mara',
     'Minimax',
     'Mistral',
     'ModelRun',
@@ -82,19 +88,104 @@ const OPENROUTER_PROVIDERS = [
     'Parasail',
     'Perplexity',
     'Phala',
+    'Recraft',
+    'Reka',
     'Relace',
     'SambaNova',
+    'Seed',
     'SiliconFlow',
+    'Sourceful',
     'Stealth',
+    'StepFun',
     'StreamLake',
     'Switchpoint',
-    'Targon',
     'Together',
+    'Upstage',
     'Venice',
     'WandB',
     'xAI',
+    'Xiaomi',
     'Z.AI',
 ];
+
+const OPENROUTER_PROVIDER_WARNING_SELECTORS = {
+    '#openrouter_providers_text': {
+        fallbackSelector: '#openrouter_allow_fallbacks_textgenerationwebui',
+        warningSelector: '#openrouter_provider_warning_text',
+    },
+    '#openrouter_providers_chat': {
+        fallbackSelector: '#openrouter_allow_fallbacks',
+        warningSelector: '#openrouter_provider_warning_chat',
+    },
+};
+
+export function updateOpenRouterProvidersWarning(providersSelector) {
+    const $providers = $(providersSelector);
+
+    const warningSelectors = OPENROUTER_PROVIDER_WARNING_SELECTORS[providersSelector];
+
+    if ($providers.length === 0 || !warningSelectors) {
+        return;
+    }
+
+    const $fallback = $(warningSelectors.fallbackSelector);
+    const $warning = $(warningSelectors.warningSelector);
+
+    const allowFallback = !!$fallback.prop('checked');
+    const selectedCount = $providers.find('option:selected').length;
+    const applicableSelectedCount = $providers.find('option:selected:not(:disabled)').length;
+    const showWarning = !allowFallback && selectedCount > 0 && applicableSelectedCount === 0;
+
+    $warning.toggleClass('displayNone', !showWarning);
+}
+
+export async function syncOpenRouterProvidersForModel(modelId, providersSelector) {
+    const $providers = $(providersSelector);
+
+    const refreshWarningState = () => {
+        updateOpenRouterProvidersWarning(providersSelector);
+    };
+
+    if (!modelId || !modelId.includes('/')) {
+        $providers.find('option').prop('disabled', false);
+        $providers.trigger('change.select2');
+        refreshWarningState();
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/openrouter/models/providers', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ model: modelId }),
+        });
+
+        if (!response.ok) {
+            refreshWarningState();
+            return;
+        }
+
+        const providerNames = await response.json();
+
+        if (!Array.isArray(providerNames) || providerNames.length === 0) {
+            $providers.find('option').prop('disabled', false);
+            $providers.trigger('change.select2');
+            refreshWarningState();
+            return;
+        }
+
+        $providers.find('option').each(function () {
+            const isAvailable = providerNames.includes($(this).val());
+            $(this).prop('disabled', !isAvailable);
+        });
+
+        $providers.trigger('change.select2');
+        refreshWarningState();
+    } catch (error) {
+        console.error('Failed to fetch OpenRouter providers for model', error);
+        refreshWarningState();
+    }
+}
 
 export async function loadOllamaModels(data) {
     if (!Array.isArray(data)) {
@@ -310,6 +401,7 @@ export async function loadOpenRouterModels(data) {
 
     // Calculate the cost of the selected model + update on settings change
     calculateOpenRouterCost();
+    syncOpenRouterProvidersForModel(textgen_settings.openrouter_model, '#openrouter_providers_text');
 }
 
 export async function loadVllmModels(data) {
@@ -536,14 +628,11 @@ export async function loadFeatherlessModels(data) {
 
             if (selectedCategory === 'All') {
                 return matchesSearch && matchesClass;
-            }
-            else if (selectedCategory === 'Top') {
+            } else if (selectedCategory === 'Top') {
                 return matchesSearch && matchesClass && matchesTop;
-            }
-            else if (selectedCategory === 'New') {
+            } else if (selectedCategory === 'New') {
                 return matchesSearch && matchesClass && matchesNew;
-            }
-            else {
+            } else {
                 return matchesSearch && matchesClass;
             }
         });
@@ -673,6 +762,7 @@ function onOpenRouterModelSelect() {
     textgen_settings.openrouter_model = modelId;
     $('#api_button_textgenerationwebui').trigger('click');
     const model = openRouterModels.find(x => x.id === modelId);
+    syncOpenRouterProvidersForModel(modelId, '#openrouter_providers_text');
     setGenerationParamsFromPreset({ max_length: model.context_length });
 }
 
@@ -880,8 +970,8 @@ async function downloadTabbyModel() {
         }
 
         // Params for the server side of ST
-        params['api_server'] = serverUrl;
-        params['api_type'] = textgen_settings.type;
+        params.api_server = serverUrl;
+        params.api_type = textgen_settings.type;
 
         toastr.info('Downloading. Check the Tabby console for progress reports.');
 
@@ -1064,6 +1154,13 @@ export function initTextGenModels() {
             searchInputCssClass: 'text_pole',
             width: '100%',
             templateResult: getAphroditeModelTemplate,
+        });
+        $('.openrouter_quantizations').select2({
+            closeOnSelect: false,
+            placeholder: t`Select quantizations. No selection = all quantizations.`,
+            searchInputCssClass: 'text_pole',
+            searchInputPlaceholder: t`Search quantizations...`,
+            width: '100%',
         });
         providersSelect.select2({
             sorter: data => data.sort((a, b) => a.text.localeCompare(b.text)),

@@ -114,11 +114,19 @@ export const MacroValueType = Object.freeze({
  * @property {string} rawOriginal - The original full macro text including braces, before any resolution.
  * @property {string[]} rawArgs - The original arguments passed to the macro (always unresolved).
  * @property {MacroEnv} env
- * @property {CstNode|null} cstNode
- * @property {{ startOffset: number, endOffset: number }|null} range
+ * @property {CstNode} cstNode
+ * @property {{ startOffset: number, endOffset: number }} range - Range relative to the current evaluation context's text.
+ * @property {number} globalOffset - The offset of this macro in the original top-level document.
+ *           This combines the context's base offset with the local range. Use this for deterministic
+ *           seeding (e.g., in {{pick}}) to ensure identical macros at different positions produce different results.
  * @property {(value: any) => string} normalize - Normalize function to use on unsure macro results to make sure they return strings as expected.
  * @property {(content: string, options?: { trimIndent?: boolean }) => string} trimContent - Trims scoped content with optional indentation dedent. Defaults to trimming indentation.
- * @property {(text: string) => string} resolve - Evaluates macros in the given text using the same environment. Use when delayArgResolution is true.
+ * @property {(text: string, options?: { offsetDelta?: number }) => string} resolve - Evaluates macros in the given text using the same environment.
+ *           Use when delayArgResolution is true. By default, preserves the caller's globalOffset so nested
+ *           macros like {{pick}} maintain deterministic position-based behavior. Pass offsetDelta to add
+ *           an additional offset for uniqueness (e.g., to differentiate between multiple resolve calls).
+ * @property {(message: string, error?: any) => void} warn - Logs a runtime warning with automatic macro call context.
+ *           Use this to report issues in how the macro was invoked (e.g., invalid argument values, edge cases).
  */
 
 /**
@@ -192,11 +200,6 @@ class MacroRegistry {
         name = typeof name === 'string' ? name.trim() : String(name);
 
         try {
-            const nameKey = name.toLowerCase();
-            if (this.#macros.has(nameKey)) {
-                logMacroRegisterWarning({ macroName: name, message: `Macro "${name}" is already registered and will be overwritten.` });
-            }
-
             // Detect extension/third-party status from call stack
             const { isExtension, isThirdParty, source } = detectMacroSource();
 
@@ -205,22 +208,12 @@ class MacroRegistry {
                 source: { name: source, isExtension, isThirdParty },
             });
 
-            this.#macros.set(nameKey, definition);
+            // Register the primary macro
+            this.#registerMacroEntry(name, definition);
 
             // Register alias entries pointing to the same definition
             for (const { alias, visible } of definition.aliases) {
-                const aliasKey = alias.toLowerCase();
-                if (this.#macros.has(aliasKey)) {
-                    logMacroRegisterWarning({ macroName: name, message: `Alias "${alias}" for macro "${name}" overwrites an existing macro.` });
-                }
-                /** @type {MacroDefinition} */
-                const aliasEntry = {
-                    ...definition,
-                    name: alias, // The lookup name is the alias (preserves original casing for display)
-                    aliasOf: name,
-                    aliasVisible: visible,
-                };
-                this.#macros.set(aliasKey, aliasEntry);
+                this.#registerMacroEntry(alias, definition, { primaryMacroName: name, aliasVisible: visible });
             }
 
             return definition;
@@ -232,6 +225,97 @@ class MacroRegistry {
             });
             return null;
         }
+    }
+
+    /**
+     * Registers an alias for an existing macro.
+     * The alias will point to the same handler and metadata as the original macro.
+     * Errors during registration are caught and logged, the alias will not be registered, and the function returns false.
+     *
+     * @param {string} targetMacroName - The name of the existing macro to create an alias for.
+     * @param {string} aliasName - The alias name (identifier).
+     * @param {Object} [options] - Alias registration options.
+     * @param {boolean} [options.visible=true] - Whether this alias appears in documentation/autocomplete.
+     * @returns {boolean} True if the alias was registered successfully, false if registration failed.
+     */
+    registerMacroAlias(targetMacroName, aliasName, { visible = true } = {}) {
+        // Extract names early for error logging
+        targetMacroName = typeof targetMacroName === 'string' ? targetMacroName.trim() : String(targetMacroName);
+        aliasName = typeof aliasName === 'string' ? aliasName.trim() : String(aliasName);
+
+        try {
+            // Validate alias name
+            if (!isIdentifierValid(aliasName)) {
+                throw new Error(`Alias name "${aliasName}" is invalid. Must start with a letter, followed by alphanumeric characters or hyphens.`);
+            }
+
+            // Check that alias is not the same as target (case insensitive)
+            if (aliasName.toLowerCase() === targetMacroName.toLowerCase()) {
+                throw new Error(`Alias name "${aliasName}" cannot be the same as the target macro name (case insensitive).`);
+            }
+
+            // Check that target macro exists
+            const targetDefinition = this.getMacro(targetMacroName);
+            if (!targetDefinition) {
+                throw new Error(`Target macro "${targetMacroName}" is not registered.`);
+            }
+
+            // Get the primary definition (in case target is itself an alias)
+            const primaryDefinition = targetDefinition.aliasOf ? this.getMacro(targetDefinition.aliasOf) : targetDefinition;
+            if (!primaryDefinition) {
+                throw new Error(`Could not resolve primary definition for target macro "${targetMacroName}".`);
+            }
+
+            // Detect extension/third-party status from call stack
+            const { isExtension, isThirdParty, source } = detectMacroSource();
+
+            // Create alias definition with source detection
+            const aliasDefinition = {
+                ...primaryDefinition,
+                source: { name: source, isExtension, isThirdParty },
+            };
+
+            // Register the alias using the shared utility
+            this.#registerMacroEntry(aliasName, aliasDefinition, { primaryMacroName: primaryDefinition.name, aliasVisible: visible });
+
+            return true;
+        } catch (error) {
+            logMacroRegisterError({
+                message: `Failed to register alias "${aliasName}" for macro "${targetMacroName}". The alias will not be available.`,
+                macroName: aliasName,
+                error,
+            });
+            return false;
+        }
+    }
+
+    /**
+     * Shared utility for registering macro entries (primary or alias).
+     *
+     * @param {string} name - The registration name (primary macro or alias).
+     * @param {MacroDefinition} definition - The definition to register.
+     * @param {Object} [options={}] - Options for alias registration.
+     * @param {string} [options.primaryMacroName=null] - For aliases, the primary macro name.
+     * @param {boolean} [options.aliasVisible=null] - For aliases, visibility flag.
+     */
+    #registerMacroEntry(name, definition, { primaryMacroName = null, aliasVisible = null } = {}) {
+        const nameKey = name.toLowerCase();
+
+        if (this.#macros.has(nameKey)) {
+            const warningType = primaryMacroName ? `Alias "${name}" for macro "${primaryMacroName}"` : `Macro "${name}"`;
+            const warningMessage = primaryMacroName ? 'overwrites an existing macro.' : 'is already registered and will be overwritten.';
+            logMacroRegisterWarning({ macroName: primaryMacroName || name, message: `${warningType} ${warningMessage}` });
+        }
+
+        /** @type {MacroDefinition} */
+        const entry = primaryMacroName ? {
+            ...definition,
+            name: name, // The lookup name is the alias (preserves original casing for display)
+            aliasOf: primaryMacroName,
+            aliasVisible: aliasVisible,
+        } : definition;
+
+        this.#macros.set(nameKey, entry);
     }
 
     /**
@@ -363,9 +447,13 @@ class MacroRegistry {
             env: call.env,
             cstNode: call.cstNode,
             range: call.range,
+            globalOffset: call.globalOffset,
             normalize: MacroEngine.normalizeMacroResult.bind(MacroEngine),
             trimContent: MacroEngine.trimScopedContent.bind(MacroEngine),
-            resolve: (text) => MacroEngine.evaluate(text, call.env),
+            resolve: (text, { offsetDelta = 0 } = {}) => MacroEngine.evaluate(text, call.env, {
+                contextOffset: call.globalOffset + offsetDelta,
+            }),
+            warn: (message, error = undefined) => logMacroRuntimeWarning({ message, call, def, error }),
         };
 
         const result = def.handler(executionContext);

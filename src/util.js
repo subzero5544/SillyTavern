@@ -157,8 +157,7 @@ export async function getVersion() {
             const remoteLatest = await git.revparse([trackingBranch]);
             isLatest = localLatest === remoteLatest;
         }
-    }
-    catch {
+    } catch {
         // suppress exception
     }
 
@@ -580,18 +579,28 @@ export function clientRelativePath(root, inputPath) {
 
 /**
  * Returns a name that is unique among the names that exist.
- * @param {string} name The name to check.
+ * @param {string} baseName The name to check.
  * @param {{ (name: string): boolean; }} exists Function to check if name exists.
- * @returns {string} A unique name.
+ * @param {Object} [options] The options.
+ * @param {((baseName: string, i: number) => string)|null} [options.nameBuilder=null] Function to build the name.
+ *        Starts with the index provided by `startIndex` (default is 1). If not provided, uses "${baseName} (${i})".
+ * @param {number} [options.maxTries=1000] The maximum number of tries to find a unique name. Default is 1000.
+ * @param {number} [options.startIndex=1] The index to start with when building the name. Default is 1.
+ *        When set to 0, the intention is to also check if the basename (without applied index) is free.
+ * @returns {string|null} A unique name. Null if no unique name could be found in `maxTries`.
  */
-export function getUniqueName(name, exists) {
-    let i = 1;
-    let baseName = name;
-    while (exists(name)) {
-        name = `${baseName} (${i})`;
+export function getUniqueName(baseName, exists, { nameBuilder = null, maxTries = 1000, startIndex = 1 } = {}) {
+    nameBuilder ??= (baseName, i) => i === 0 ? baseName : `${baseName} (${i})`;
+    let i = startIndex;
+    let name;
+    while (i < maxTries + startIndex) {
+        name = nameBuilder(baseName, i);
+        if (!exists(name)) {
+            return name;
+        }
         i++;
     }
-    return name;
+    return null;
 }
 
 /**
@@ -695,14 +704,11 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
  * Pipe a fetch() response to an Express.js Response, including status code.
  * @param {import('node-fetch').Response} from The Fetch API response to pipe from.
  * @param {import('express').Response} to The Express response to pipe to.
+ * @returns {Promise<void>}
  */
-export function forwardFetchResponse(from, to) {
+export async function forwardFetchResponse(from, to) {
     let statusCode = from.status;
     let statusText = from.statusText;
-
-    if (!from.ok) {
-        console.warn(`Streaming request failed with status ${statusCode} ${statusText}`);
-    }
 
     // Avoid sending 401 responses as they reset the client Basic auth.
     // This can produce an interesting artifact as "400 Unauthorized", but it's not out of spec.
@@ -715,6 +721,21 @@ export function forwardFetchResponse(from, to) {
 
     to.statusCode = statusCode;
     to.statusMessage = statusText;
+
+    if (!from.ok) {
+        try {
+            const rawErrorText = await from.text();
+            const detail = rawErrorText || 'Unknown error occurred';
+
+            console.warn(`Streaming request failed with status ${from.status} ${statusText}: ${detail}`);
+            to.end(rawErrorText, 'utf-8');
+        } catch {
+            console.warn(`Streaming request failed with status ${from.status} ${statusText}: Unknown error occurred`);
+            to.end();
+        }
+
+        return;
+    }
 
     if (from.body && to.socket) {
         from.body.pipe(to);
@@ -811,8 +832,7 @@ export function mergeObjectWithYaml(obj, yamlString) {
                     Object.assign(obj, item);
                 }
             }
-        }
-        else if (parsedObject && typeof parsedObject === 'object') {
+        } else if (parsedObject && typeof parsedObject === 'object') {
             Object.assign(obj, parsedObject);
         }
     } catch {
@@ -1002,7 +1022,6 @@ export async function canResolve(name, useIPv6 = true, useIPv4 = true) {
         }
 
         return v6Resolved || v4Resolved;
-
     } catch (error) {
         return false;
     }
@@ -1298,8 +1317,7 @@ export function safeReadFileSync(filePath, options = { encoding: 'utf-8' }) {
 export function setWindowTitle(title) {
     if (process.platform === 'win32') {
         process.title = title;
-    }
-    else {
+    } else {
         process.stdout.write(`\x1b]2;${title}\x1b\x5c`);
     }
 }

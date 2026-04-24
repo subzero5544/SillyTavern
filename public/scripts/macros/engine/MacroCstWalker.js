@@ -3,9 +3,12 @@
 /** @typedef {import('./MacroEnv.types.js').MacroEnv} MacroEnv */
 /** @typedef {import('./MacroFlags.js').MacroFlags} MacroFlags */
 
+import { logMacroInternalError, logMacroRuntimeWarning } from './MacroDiagnostics.js';
+import { MacroEngine } from './MacroEngine.js';
 import { parseFlags, createEmptyFlags, MacroFlagType } from './MacroFlags.js';
 import { MacroParser } from './MacroParser.js';
 import { MacroRegistry } from './MacroRegistry.js';
+import { isFalseBoolean } from '/scripts/utils.js';
 
 /**
  * @typedef {Object} MacroCall
@@ -18,7 +21,10 @@ import { MacroRegistry } from './MacroRegistry.js';
  * @property {string} rawInner
  * @property {string} rawWithBraces
  * @property {string[]} rawArgs
- * @property {{ startOffset: number, endOffset: number }} range
+ * @property {{ startOffset: number, endOffset: number }} range - Range relative to the current evaluation context's text.
+ * @property {number} globalOffset - The offset of this macro in the original top-level document.
+ *           This combines the context's base offset with the local range. Use this for deterministic
+ *           seeding (e.g., in {{pick}}) to ensure identical macros at different positions produce different results.
  * @property {CstNode} cstNode
  */
 
@@ -31,10 +37,21 @@ import { MacroRegistry } from './MacroRegistry.js';
  */
 
 /**
+ * Context passed through the CST evaluation process.
+ *
  * @typedef {Object} EvaluationContext
- * @property {string} text
- * @property {MacroEnv} env
- * @property {(call: MacroCall) => string} resolveMacro
+ * @property {string} text - The text being evaluated at the current level. This is NOT the same as env.content.
+ *           At the top level, this is the full document text. When evaluating nested content (arguments or scoped
+ *           content), this is the substring being evaluated. CST node positions are always relative to this text.
+ *
+ *           - Careful, this also means when resolving macros inside macro arguments, this will NOT be the text of
+ *           the argument currently being resolved, but the full macro text with identifier and all macros.
+ * @property {number} contextOffset - Base offset from the original top-level document. At the top level this is 0.
+ *           When re-parsing nested content (arguments/scoped), this is set to the substring's start position in
+ *           the original document. Used to calculate globalOffset for macros that need deterministic positioning.
+ * @property {MacroEnv} env - The macro environment containing context like user/char names, variables, and the
+ *           original full content (env.content). This remains constant throughout the evaluation.
+ * @property {(call: MacroCall) => string} resolveMacro - Callback to resolve a macro call to its result string.
  * @property {(content: string, options?: { trimIndent?: boolean }) => string} trimContent - Shared utility function that trims scoped content with optional indentation dedent.
  */
 
@@ -74,7 +91,7 @@ class MacroCstWalker {
      * @returns {string}
      */
     evaluateDocument(options) {
-        const { text, cst, env, resolveMacro, trimContent } = options;
+        const { text, cst, contextOffset, env, resolveMacro, trimContent } = options;
 
         if (typeof text !== 'string') {
             throw new Error('MacroCstWalker.evaluateDocument: text must be a string');
@@ -90,7 +107,7 @@ class MacroCstWalker {
         }
 
         /** @type {EvaluationContext} */
-        const context = { text, env, resolveMacro, trimContent };
+        const context = { text, contextOffset, env, resolveMacro, trimContent };
         let items = this.#collectDocumentItems(cst);
 
         // Process scoped macros: find opening/closing pairs and merge them
@@ -214,9 +231,12 @@ class MacroCstWalker {
             if (!info) continue;
 
             if (info.isClosing) {
-                // Closing tag - pop matching opener from stack (case-insensitive match)
-                if (unclosedStack.length > 0 && unclosedStack[unclosedStack.length - 1].name.toLowerCase() === info.name.toLowerCase()) {
-                    unclosedStack.pop();
+                // Find matching opener in stack (case-insensitive)
+                // When closing an outer scope, all inner unclosed scopes are implicitly closed
+                const matchIndex = unclosedStack.findLastIndex(s => s.name.toLowerCase() === info.name.toLowerCase());
+                if (matchIndex !== -1) {
+                    // Pop everything from matchIndex to end (inclusive) - closes the matched scope and all nested ones
+                    unclosedStack.splice(matchIndex);
                 }
                 // If no matching opener, ignore (orphan closing tag)
             } else {
@@ -341,7 +361,7 @@ class MacroCstWalker {
      * @returns {string}
      */
     #evaluateMacroNode(macroNode, context, scopedContent) {
-        const { text, env, resolveMacro, trimContent } = context;
+        const { text, contextOffset, env, resolveMacro, trimContent } = context;
 
         const children = macroNode.children || {};
 
@@ -467,6 +487,7 @@ class MacroCstWalker {
             rawWithBraces: text.slice(range.startOffset, range.endOffset + 1),
             rawArgs,
             range,
+            globalOffset: contextOffset + range.startOffset,
             cstNode: macroNode,
             env,
         };
@@ -478,7 +499,10 @@ class MacroCstWalker {
     }
 
     /**
-     * Evaluates a variable expression node and routes it to the appropriate variable macro.
+     * Evaluates a variable expression node using direct variable API calls.
+     * Supports operators: get, set (=), add (+=), sub (-=), inc (++), dec (--),
+     * logical or (||), nullish coalescing (??), logical or assign (||=),
+     * nullish coalescing assign (??=), and equality comparison (==).
      *
      * @param {CstNode} macroNode - The parent macro node.
      * @param {CstNode} variableExprNode - The variableExpr CST node.
@@ -486,9 +510,6 @@ class MacroCstWalker {
      * @returns {string}
      */
     #evaluateVariableExpr(macroNode, variableExprNode, context) {
-        const { text, env, resolveMacro } = context;
-
-        const children = macroNode.children || {};
         const varChildren = variableExprNode.children || {};
 
         // Extract scope (. for local, $ for global)
@@ -503,9 +524,9 @@ class MacroCstWalker {
         const operatorNode = /** @type {CstNode?} */ ((varChildren.variableOperator || [])[0]);
         const operatorChildren = operatorNode?.children || {};
 
-        // Determine operation and value
+        // Determine operation and whether a value expression is expected
         let operation = 'get';
-        let value = null;
+        let hasValueExpr = false;
 
         if (operatorNode) {
             const operatorTokens = /** @type {IToken[]} */ (operatorChildren['Var.operator'] || []);
@@ -513,59 +534,253 @@ class MacroCstWalker {
 
             if (operatorToken) {
                 const operatorImage = operatorToken.image;
-                if (operatorImage === '++') {
-                    operation = 'inc';
-                } else if (operatorImage === '--') {
-                    operation = 'dec';
-                } else if (operatorImage === '=') {
-                    operation = 'set';
-                    value = this.#evaluateVariableValue(operatorChildren, context);
-                } else if (operatorImage === '+=') {
-                    operation = 'add';
-                    value = this.#evaluateVariableValue(operatorChildren, context);
+                switch (operatorImage) {
+                    case '++':
+                        operation = 'inc';
+                        break;
+                    case '--':
+                        operation = 'dec';
+                        break;
+                    case '=':
+                        operation = 'set';
+                        hasValueExpr = true;
+                        break;
+                    case '+=':
+                        operation = 'add';
+                        hasValueExpr = true;
+                        break;
+                    case '-=':
+                        operation = 'sub';
+                        hasValueExpr = true;
+                        break;
+                    case '||':
+                        operation = 'logicalOr';
+                        hasValueExpr = true;
+                        break;
+                    case '??':
+                        operation = 'nullishCoalescing';
+                        hasValueExpr = true;
+                        break;
+                    case '||=':
+                        operation = 'logicalOrAssign';
+                        hasValueExpr = true;
+                        break;
+                    case '??=':
+                        operation = 'nullishCoalescingAssign';
+                        hasValueExpr = true;
+                        break;
+                    case '==':
+                        operation = 'equals';
+                        hasValueExpr = true;
+                        break;
+                    case '!=':
+                        operation = 'notEquals';
+                        hasValueExpr = true;
+                        break;
+                    case '>':
+                        operation = 'greaterThan';
+                        hasValueExpr = true;
+                        break;
+                    case '>=':
+                        operation = 'greaterThanOrEqual';
+                        hasValueExpr = true;
+                        break;
+                    case '<':
+                        operation = 'lessThan';
+                        hasValueExpr = true;
+                        break;
+                    case '<=':
+                        operation = 'lessThanOrEqual';
+                        hasValueExpr = true;
+                        break;
+                    default:
+                        logMacroInternalError({ message: `Lexer found macro operator that is not implemented for variable shorthand expressions in macro node '${macroNode.name}'.` });
+                        break;
                 }
             }
         }
 
-        // Map operation to macro name
-        const macroNameMap = {
-            get: isGlobal ? 'getglobalvar' : 'getvar',
-            set: isGlobal ? 'setglobalvar' : 'setvar',
-            inc: isGlobal ? 'incglobalvar' : 'incvar',
-            dec: isGlobal ? 'decglobalvar' : 'decvar',
-            add: isGlobal ? 'addglobalvar' : 'addvar',
+        // Create a lazy value resolver that caches its result on first call.
+        // This ensures the value expression is only evaluated when actually needed,
+        // which is important for performance and because some macros are stateful.
+        const lazyValue = hasValueExpr ? this.#createLazyValue(operatorChildren, context) : () => '';
+
+        // Execute the operation using direct variable API calls
+        return this.#executeVariableOperation(varName, isGlobal, operation, lazyValue);
+    }
+
+    /**
+     * Creates a lazy value resolver that caches its result on first call.
+     * This ensures the value expression is only evaluated when actually needed.
+     *
+     * @param {Record<string, any>} operatorChildren - The children of the variableOperator node.
+     * @param {EvaluationContext} context - The evaluation context.
+     * @returns {() => string} A function that returns the evaluated value, caching the result.
+     */
+    #createLazyValue(operatorChildren, context) {
+        let cached = null;
+        let resolved = false;
+
+        return () => {
+            if (!resolved) {
+                cached = this.#evaluateVariableValue(operatorChildren, context);
+                resolved = true;
+            }
+            return cached;
         };
+    }
 
-        const targetMacroName = macroNameMap[operation];
+    /**
+     * Executes a variable operation using the SillyTavern context API.
+     *
+     * @param {string} varName - The variable name.
+     * @param {boolean} isGlobal - Whether this is a global ($) or local (.) variable.
+     * @param {string} operation - The operation to perform.
+     * @param {() => string} lazyValue - A lazy function that returns the value when called. Only evaluated when needed.
+     * @returns {string} The result of the operation.
+     */
+    #executeVariableOperation(varName, isGlobal, operation, lazyValue) {
+        const ctx = SillyTavern.getContext();
+        const vars = isGlobal ? ctx.variables.global : ctx.variables.local;
 
-        // Build args array based on operation
-        const args = [varName];
-        if (value !== null) {
-            args.push(value);
+        /**
+        * Normalizes macro results into a string.
+        * @param {any} value
+        * @returns {string}
+        */
+        const normalize = MacroEngine.normalizeMacroResult.bind(MacroEngine);
+
+        /**
+         * Checks if a value is falsy (empty string, 0, '0', false, 'false', null, undefined).
+         * @param {any} val
+         * @returns {boolean}
+         */
+        const isFalsy = (val) => !val || isFalseBoolean(normalize(val));
+
+        switch (operation) {
+            case 'get':
+                return normalize(vars.get(varName));
+
+            case 'set':
+                vars.set(varName, lazyValue());
+                return '';
+
+            case 'inc':
+                return normalize(vars.inc(varName));
+
+            case 'dec':
+                return normalize(vars.dec(varName));
+
+            case 'add':
+                vars.add(varName, lazyValue());
+                return '';
+
+            case 'sub': {
+                // Subtract by adding the negative value
+                const numValue = Number(lazyValue());
+                if (!isNaN(numValue)) vars.add(varName, -numValue);
+                else logMacroRuntimeWarning({ message: `Variable shorthand "-=" operator requires a numeric value, got: "${lazyValue()}"` });
+                return '';
+            }
+
+            case 'logicalOr': {
+                // Returns default value if variable is falsy, otherwise returns variable value
+                // Value is only resolved if needed (when variable is falsy)
+                const currentValue = vars.get(varName);
+                return isFalsy(currentValue) ? normalize(lazyValue()) : normalize(currentValue);
+            }
+
+            case 'nullishCoalescing': {
+                // Returns default value only if variable doesn't exist, otherwise returns variable value (even if falsy)
+                // Value is only resolved if needed (when variable doesn't exist)
+                const exists = vars.has(varName);
+                return exists ? normalize(vars.get(varName)) : normalize(lazyValue());
+            }
+
+            case 'logicalOrAssign': {
+                // If variable is falsy, set it to value and return value; otherwise return current value
+                // Value is only resolved if needed (when variable is falsy)
+                const currentValue = vars.get(varName);
+                if (isFalsy(currentValue)) {
+                    vars.set(varName, lazyValue());
+                    return normalize(lazyValue());
+                }
+                return normalize(currentValue);
+            }
+
+            case 'nullishCoalescingAssign': {
+                // If variable doesn't exist, set it to value and return value; otherwise return current value
+                // Value is only resolved if needed (when variable doesn't exist)
+                const exists = vars.has(varName);
+                if (!exists) {
+                    vars.set(varName, lazyValue());
+                    return normalize(lazyValue());
+                }
+                return normalize(vars.get(varName));
+            }
+
+            case 'equals': {
+                // String equality comparison - value is always needed
+                const currentValue = normalize(vars.get(varName));
+                const compareValue = normalize(lazyValue());
+                return currentValue === compareValue ? 'true' : 'false';
+            }
+
+            case 'notEquals': {
+                // String inequality comparison - value is always needed
+                const currentValue = normalize(vars.get(varName));
+                const compareValue = normalize(lazyValue());
+                return currentValue !== compareValue ? 'true' : 'false';
+            }
+
+            case 'greaterThan': {
+                // Numeric greater than comparison
+                const currentNum = Number(vars.get(varName));
+                const compareNum = Number(lazyValue());
+                if (isNaN(currentNum) || isNaN(compareNum)) {
+                    logMacroRuntimeWarning({ message: `Variable shorthand ">" operator requires numeric values. Got: "${vars.get(varName)}" > "${lazyValue()}"` });
+                    return 'false';
+                }
+                return currentNum > compareNum ? 'true' : 'false';
+            }
+
+            case 'greaterThanOrEqual': {
+                // Numeric greater than or equal comparison
+                const currentNum = Number(vars.get(varName));
+                const compareNum = Number(lazyValue());
+                if (isNaN(currentNum) || isNaN(compareNum)) {
+                    logMacroRuntimeWarning({ message: `Variable shorthand ">=" operator requires numeric values. Got: "${vars.get(varName)}" >= "${lazyValue()}"` });
+                    return 'false';
+                }
+                return currentNum >= compareNum ? 'true' : 'false';
+            }
+
+            case 'lessThan': {
+                // Numeric less than comparison
+                const currentNum = Number(vars.get(varName));
+                const compareNum = Number(lazyValue());
+                if (isNaN(currentNum) || isNaN(compareNum)) {
+                    logMacroRuntimeWarning({ message: `Variable shorthand "<" operator requires numeric values. Got: "${vars.get(varName)}" < "${lazyValue()}"` });
+                    return 'false';
+                }
+                return currentNum < compareNum ? 'true' : 'false';
+            }
+
+            case 'lessThanOrEqual': {
+                // Numeric less than or equal comparison
+                const currentNum = Number(vars.get(varName));
+                const compareNum = Number(lazyValue());
+                if (isNaN(currentNum) || isNaN(compareNum)) {
+                    logMacroRuntimeWarning({ message: `Variable shorthand "<=" operator requires numeric values. Got: "${vars.get(varName)}" <= "${lazyValue()}"` });
+                    return 'false';
+                }
+                return currentNum <= compareNum ? 'true' : 'false';
+            }
+
+            default:
+                logMacroRuntimeWarning({ message: `Unknown variable shorthand operation: "${operation}"` });
+                return '';
         }
-
-        const range = this.#getMacroRange(macroNode);
-
-        /** @type {MacroCall} */
-        const call = {
-            name: targetMacroName,
-            args,
-            flags: createEmptyFlags(),
-            isScoped: false,
-            isVariableShorthand: true,
-            rawInner: text.slice(
-                (/** @type {IToken|undefined} */ (children['Macro.Start']?.[0])?.endOffset ?? range.startOffset) + 1,
-                (/** @type {IToken|undefined} */ (children['Macro.End']?.[0])?.startOffset ?? range.endOffset + 1) - 1,
-            ),
-            rawWithBraces: text.slice(range.startOffset, range.endOffset + 1),
-            rawArgs: args,
-            range,
-            cstNode: macroNode,
-            env,
-        };
-
-        const result = resolveMacro(call);
-        return typeof result === 'string' ? result : String(result ?? '');
     }
 
     /**
@@ -642,9 +857,13 @@ class MacroCstWalker {
      * Evaluates a single argument node by resolving nested macros and reconstructing
      * the original argument text.
      *
-     * @param {CstNode} argNode
-     * @param {EvaluationContext} context
-     * @returns {string}
+     * This method extracts the argument's raw text and re-parses it to properly
+     * handle scoped macros (opening/closing tag pairs) that may appear within
+     * the argument content.
+     *
+     * @param {CstNode} argNode - The argument CST node to evaluate.
+     * @param {EvaluationContext} context - The evaluation context containing the parent document's text and environment.
+     * @returns {string} The evaluated argument with all nested macros (including scoped ones) resolved.
      */
     #evaluateArgumentNode(argNode, context) {
         const location = this.#getArgumentLocation(argNode);
@@ -652,38 +871,87 @@ class MacroCstWalker {
             return '';
         }
 
-        const { text } = context;
+        const { text, contextOffset } = context;
+        const rawContent = text.slice(location.startOffset, location.endOffset + 1);
 
-        const nestedMacros = /** @type {CstNode[]} */ ((argNode.children || {}).macro || []);
+        // Calculate the new base offset: parent's contextOffset + this argument's start position
+        const newContextOffset = contextOffset + location.startOffset;
 
-        // If there are no nested macros, we can just return the original text
-        if (nestedMacros.length === 0) {
-            return text.slice(location.startOffset, location.endOffset + 1);
+        // Use the shared helper to evaluate the content, which handles scoped macros
+        return this.#evaluateRawContent(rawContent, newContextOffset, context);
+    }
+
+    /**
+     * Evaluates a text content string by parsing it and resolving all macros,
+     * including scoped macro pairs (opening/closing tags).
+     *
+     * This is the core helper used by both argument evaluation and scoped content
+     * evaluation to ensure consistent handling of nested and scoped macros.
+     *
+     * @param {string} rawContent - The raw text content to evaluate.
+     * @param {number} newContextOffset - The offset of rawContent's start position in the original top-level document.
+     * @param {EvaluationContext} context - The parent evaluation context (used for env, resolveMacro, trimContent).
+     * @returns {string} The evaluated content with all macros resolved.
+     */
+    #evaluateRawContent(rawContent, newContextOffset, context) {
+        // If empty, return as-is
+        if (!rawContent) {
+            return '';
         }
 
-        // If there are macros, evaluate them one by one in appearing order, inside the argument, before we return the resolved argument
-        const nestedWithRange = nestedMacros.map(node => ({
-            node,
-            range: this.#getMacroRange(node),
-        }));
+        // Re-evaluate the content to find all nested macros including scoped pairs
+        // We need to parse and evaluate this content as if it were a standalone document
+        const { cst } = MacroParser.parseDocument(rawContent);
 
-        nestedWithRange.sort((a, b) => a.range.startOffset - b.range.startOffset);
+        // If parsing fails, return the raw content
+        if (!cst || typeof cst !== 'object' || !cst.children) {
+            return rawContent;
+        }
 
+        // Create a new context with the content as the text and updated contextOffset
+        // This is important: positions in the parsed CST are relative to rawContent,
+        // but contextOffset tracks the absolute position in the original document
+        /** @type {EvaluationContext} */
+        const contentContext = { ...context, text: rawContent, contextOffset: newContextOffset };
+
+        // Collect items and process scoped macros
+        let items = this.#collectDocumentItems(cst);
+        items = this.#processScopedMacros(items, rawContent);
+
+        // If no items, return raw content
+        if (items.length === 0) {
+            return rawContent;
+        }
+
+        // Evaluate items in order
         let result = '';
-        let cursor = location.startOffset;
+        let cursor = 0;
 
-        for (const entry of nestedWithRange) {
-            if (entry.range.startOffset < cursor) {
-                continue;
+        for (const item of items) {
+            if (item.startOffset > cursor) {
+                result += rawContent.slice(cursor, item.startOffset);
             }
 
-            result += text.slice(cursor, entry.range.startOffset);
-            result += this.#evaluateMacroNode(entry.node, context);
-            cursor = entry.range.endOffset + 1;
+            if (item.type === 'plaintext') {
+                result += rawContent.slice(item.startOffset, item.endOffset + 1);
+                cursor = item.endOffset + 1;
+            } else if (item.keepRaw) {
+                // Unmatched closing macros stay as raw text
+                result += rawContent.slice(item.startOffset, item.endOffset + 1);
+                cursor = item.endOffset + 1;
+            } else {
+                result += this.#evaluateMacroNode(item.node, contentContext, item.scopedContent);
+                // If this macro has scoped content, skip past the closing macro
+                if (item.scopedContent && item.scopedContent.closingEndOffset > item.endOffset) {
+                    cursor = item.scopedContent.closingEndOffset + 1;
+                } else {
+                    cursor = item.endOffset + 1;
+                }
+            }
         }
 
-        if (cursor <= location.endOffset) {
-            result += text.slice(cursor, location.endOffset + 1);
+        if (cursor < rawContent.length) {
+            result += rawContent.slice(cursor);
         }
 
         return result;
@@ -733,9 +1001,8 @@ class MacroCstWalker {
                         endOffset: element.endOffset ?? element.startOffset,
                         token: element,
                     });
-                }
-                // Handle nested CstNode (macro or argument)
-                else if ('children' in element) {
+                } else if ('children' in element) {
+                    // Handle nested CstNode (macro or argument)
                     const nestedChildren = element.children || {};
                     const nestedEnd = /** @type {IToken?} */ ((nestedChildren['Macro.End'] || [])[0]);
                     const nestedStart = /** @type {IToken?} */ ((nestedChildren['Macro.Start'] || [])[0]);
@@ -836,76 +1103,22 @@ class MacroCstWalker {
      * This resolves any nested macros within the scoped content.
      *
      * @param {{ startOffset: number, endOffset: number }} scopedContent - The range of the scoped content.
-     * @param {EvaluationContext} context - The evaluation context.
+     * @param {EvaluationContext} context - The evaluation context. The `text` property contains the parent
+     *        document text, and offsets in scopedContent are relative to that parent text.
      * @returns {string} - The evaluated scoped content with nested macros resolved.
      */
     #evaluateScopedContent(scopedContent, context) {
-        const { text, env, resolveMacro, trimContent } = context;
+        const { text, contextOffset } = context;
         const { startOffset, endOffset } = scopedContent;
 
         // Extract the raw content between opening and closing tags
         const rawContent = text.slice(startOffset, endOffset + 1);
 
-        // If empty, return empty string
-        if (!rawContent) {
-            return '';
-        }
+        // Calculate the new base offset: parent's contextOffset + this scoped content's start position
+        const newContextOffset = contextOffset + startOffset;
 
-        // Re-evaluate the scoped content to resolve any nested macros
-        // We need to parse and evaluate this content as if it were a standalone document
-        const { cst: scopedCst } = MacroParser.parseDocument(rawContent);
-
-        // If parsing fails, return the raw content
-        if (!scopedCst || typeof scopedCst !== 'object' || !scopedCst.children) {
-            return rawContent;
-        }
-
-        // Create a new context with the scoped content text
-        /** @type {EvaluationContext} */
-        const scopedContext = { text: rawContent, env, resolveMacro, trimContent };
-
-        // Collect items from the scoped content CST
-        let items = this.#collectDocumentItems(scopedCst);
-
-        // Process any nested scoped macros within this content
-        items = this.#processScopedMacros(items, rawContent);
-
-        // Evaluate the items
-        if (items.length === 0) {
-            return rawContent;
-        }
-
-        let result = '';
-        let cursor = 0;
-
-        for (const item of items) {
-            if (item.startOffset > cursor) {
-                result += rawContent.slice(cursor, item.startOffset);
-            }
-
-            if (item.type === 'plaintext') {
-                result += rawContent.slice(item.startOffset, item.endOffset + 1);
-                cursor = item.endOffset + 1;
-            } else if (item.keepRaw) {
-                // Unmatched closing macros stay as raw text
-                result += rawContent.slice(item.startOffset, item.endOffset + 1);
-                cursor = item.endOffset + 1;
-            } else {
-                result += this.#evaluateMacroNode(item.node, scopedContext, item.scopedContent);
-                // If this macro has scoped content, skip past the closing macro
-                if (item.scopedContent && item.scopedContent.closingEndOffset > item.endOffset) {
-                    cursor = item.scopedContent.closingEndOffset + 1;
-                } else {
-                    cursor = item.endOffset + 1;
-                }
-            }
-        }
-
-        if (cursor < rawContent.length) {
-            result += rawContent.slice(cursor);
-        }
-
-        return result;
+        // Use the shared helper to evaluate the content
+        return this.#evaluateRawContent(rawContent, newContextOffset, context);
     }
 
     // ========================================================================
@@ -1095,15 +1308,13 @@ class MacroCstWalker {
         const argumentNodes = /** @type {CstNode[]} */ (argumentsNode?.children?.argument || []);
         const currentArgCount = argumentNodes.length;
 
+        // List-arg macros don't support scoped content - they accept arbitrary inline args instead
+        if (def.list) {
+            return false;
+        }
+
         // Check if adding 1 more argument (scoped content) would be valid
         const newArgCount = currentArgCount + 1;
-
-        // Macro must accept at least newArgCount arguments
-        // For macros with list args, they can accept unlimited after maxArgs
-        if (def.list) {
-            // With list: valid if newArgCount >= minArgs (list can absorb extra)
-            return newArgCount >= def.minArgs;
-        }
 
         // Without list: newArgCount must be between minArgs and maxArgs
         return newArgCount >= def.minArgs && newArgCount <= def.maxArgs;

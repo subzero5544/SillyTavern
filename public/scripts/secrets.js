@@ -73,6 +73,10 @@ export const SECRET_KEYS = {
     ZAI: 'api_key_zai',
     SILICONFLOW: 'api_key_siliconflow',
     ELEVENLABS: 'api_key_elevenlabs',
+    POLLINATIONS: 'api_key_pollinations',
+    VOLCENGINE_APP_ID: 'volcengine_app_id',
+    VOLCENGINE_ACCESS_KEY: 'volcengine_access_key',
+    WORKERS_AI: 'api_key_workers_ai',
 };
 
 const FRIENDLY_NAMES = {
@@ -126,7 +130,7 @@ const FRIENDLY_NAMES = {
     [SECRET_KEYS.LINGVA_URL]: 'Lingva Endpoint (e.g. https://lingva.ml/api/v1)',
     [SECRET_KEYS.ONERING_URL]: 'OneRingTranslator Endpoint (e.g. http://127.0.0.1:4990/translate)',
     [SECRET_KEYS.DEEPLX_URL]: 'DeepLX Endpoint (e.g. http://127.0.0.1:1188/translate)',
-    [SECRET_KEYS.MINIMAX]: 'MiniMax TTS',
+    [SECRET_KEYS.MINIMAX]: 'MiniMax',
     [SECRET_KEYS.MINIMAX_GROUP_ID]: 'MiniMax Group ID',
     [SECRET_KEYS.MOONSHOT]: 'Moonshot AI',
     [SECRET_KEYS.COMETAPI]: 'CometAPI',
@@ -134,6 +138,10 @@ const FRIENDLY_NAMES = {
     [SECRET_KEYS.ZAI]: 'Z.AI',
     [SECRET_KEYS.SILICONFLOW]: 'SiliconFlow',
     [SECRET_KEYS.ELEVENLABS]: 'ElevenLabs TTS',
+    [SECRET_KEYS.POLLINATIONS]: 'Pollinations',
+    [SECRET_KEYS.VOLCENGINE_APP_ID]: 'Volcengine App ID',
+    [SECRET_KEYS.VOLCENGINE_ACCESS_KEY]: 'Volcengine Access Key',
+    [SECRET_KEYS.WORKERS_AI]: 'Cloudflare Workers AI',
 };
 
 const INPUT_MAP = {
@@ -176,7 +184,9 @@ const INPUT_MAP = {
     [SECRET_KEYS.AZURE_OPENAI]: '#api_key_azure_openai',
     [SECRET_KEYS.ZAI]: '#api_key_zai',
     [SECRET_KEYS.SILICONFLOW]: '#api_key_siliconflow',
-    [SECRET_KEYS.COMFY_RUNPOD]: '#api_key_comfy_runpod',
+    [SECRET_KEYS.MINIMAX]: '#api_key_minimax',
+    [SECRET_KEYS.POLLINATIONS]: '#api_key_pollinations',
+    [SECRET_KEYS.WORKERS_AI]: '#api_key_workers_ai',
 };
 
 const getLabel = () => moment().format('L LT');
@@ -268,6 +278,29 @@ function getActiveSecretLabel(key) {
         return activeSecret.label || activeSecret.value || t`[No label]`;
     }
     return '';
+}
+
+/**
+ * Checks if secrets can be viewed based on server configuration.
+ * @returns {Promise<boolean|null>} A boolean value, or null if the request fails.
+ */
+export async function canViewSecrets() {
+    try {
+        const response = await fetch('/api/secrets/settings', {
+            method: 'POST',
+            headers: getRequestHeaders({ omitContentType: true }),
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        const data = await response.json();
+        return data?.allowKeysExposure === true;
+    } catch (error) {
+        console.error('Error getting secrets settings:', error);
+        return null;
+    }
 }
 
 async function viewSecrets() {
@@ -467,7 +500,14 @@ export async function renameSecret(key, id, label) {
 /**
  * Redirects the user to authorize OpenRouter.
  */
-function authorizeOpenRouter() {
+async function authorizeOpenRouter() {
+    if (secret_state[SECRET_KEYS.OPENROUTER]) {
+        const confirmed = await Popup.show.confirm(t`OpenRouter API key already exists`, t`Do you really wish to create a new OpenRouter key? Your existing key will not be deleted.`);
+        if (!confirmed) {
+            return;
+        }
+    }
+
     const redirectUrl = new URL('/callback/openrouter', window.location.origin);
     const openRouterUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(redirectUrl.toString())}`;
     location.href = openRouterUrl;
@@ -1081,5 +1121,28 @@ export async function initSecrets() {
         warningElement.toggle(value.length > 0);
     });
     $('.openrouter_authorize').on('click', authorizeOpenRouter);
+    $(document).on('click', '.openrouter_view_credits', async function (event) {
+        event.preventDefault();
+        const display = $(this).siblings('.openrouter_credits_display').first();
+        display.text(t`Loading…`);
+        try {
+            const response = await fetch('/api/openrouter/credits', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const data = await response.json();
+            if (typeof data.remaining !== 'number') {
+                throw new Error('Invalid response');
+            }
+            display.text(`$${data.remaining.toFixed(2)}`);
+        } catch (error) {
+            console.error('Failed to fetch OpenRouter credits:', error);
+            display.text('');
+            toastr.error(t`Could not fetch OpenRouter credits. Please try again.`);
+        }
+    });
     registerSecretSlashCommands();
 }

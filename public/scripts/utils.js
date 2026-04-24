@@ -36,10 +36,16 @@ export const localizePagination = function (container) {
 
 /**
  * Checks if the current environment supports negative lookbehind in regular expressions.
+ * @type {{ (): boolean; result?: boolean }} Defines the function as a memoized object with a cached result.
  * @returns {boolean} True if negative lookbehind is supported, false otherwise.
  */
 export function canUseNegativeLookbehind() {
-    let result = canUseNegativeLookbehind['result'];
+    /**
+     * A reference to the function itself, typed as a callable object with a cache property.
+     * @type {{ (): boolean; result?: boolean }}
+     */
+    const fn = canUseNegativeLookbehind;
+    let result = fn.result;
     if (typeof result !== 'boolean') {
         try {
             new RegExp('(?<!_)');
@@ -47,7 +53,7 @@ export function canUseNegativeLookbehind() {
         } catch (e) {
             result = false;
         }
-        canUseNegativeLookbehind['result'] = result;
+        fn.result = result;
     }
     return result;
 }
@@ -171,6 +177,15 @@ export function isValidUrl(value) {
     } catch (_) {
         return false;
     }
+}
+
+/**
+ * Checks if a URL is external to the current domain.
+ * @param {string} url URL to check
+ * @returns {boolean} True if the URL is external, false otherwise
+ */
+export function isExternalUrl(url) {
+    return (url.indexOf('://') > 0 || url.indexOf('//') === 0) && !url.startsWith(window.location.origin);
 }
 
 /**
@@ -673,18 +688,28 @@ export function isElementInViewport(el) {
 
 /**
  * Returns a name that is unique among the names that exist.
- * @param {string} name The name to check.
+ * @param {string} baseName The name to check.
  * @param {{ (name: string): boolean; }} exists Function to check if name exists.
- * @returns {string} A unique name.
+ * @param {Object} [options] The options.
+ * @param {((baseName: string, i: number) => string)|null} [options.nameBuilder=null] Function to build the name.
+ *        Starts with the index provided by `startIndex` (default is 1). If not provided, uses "${baseName} (${i})".
+ * @param {number} [options.maxTries=1000] The maximum number of tries to find a unique name. Default is 1000.
+ * @param {number} [options.startIndex=1] The index to start with when building the name. Default is 1.
+ *        When set to 0, the intention is to also check if the basename (without applied index) is free.
+ * @returns {string|null} A unique name. Null if no unique name could be found in `maxTries`.
  */
-export function getUniqueName(name, exists) {
-    let i = 1;
-    let baseName = name;
-    while (exists(name)) {
-        name = `${baseName} (${i})`;
+export function getUniqueName(baseName, exists, { nameBuilder = null, maxTries = 1000, startIndex = 1 } = {}) {
+    nameBuilder ??= (baseName, i) => i === 0 ? baseName : `${baseName} (${i})`;
+    let i = startIndex;
+    let name;
+    while (i < maxTries + startIndex) {
+        name = nameBuilder(baseName, i);
+        if (!exists(name)) {
+            return name;
+        }
         i++;
     }
-    return name;
+    return null;
 }
 
 /**
@@ -1717,23 +1742,125 @@ export function loadFileToDocument(url, type) {
 }
 
 /**
+ * Opens a file picker dialog for selecting an image.
+ * @returns {Promise<string|null>} Base64 data URL of selected image, or null if cancelled
+ */
+export async function promptForAvatarFile() {
+    return new Promise(resolve => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = supportedImageMimeTypes.join(',');
+        input.onchange = async (e) => {
+            if (!(e.target instanceof HTMLInputElement)) {
+                return '';
+            }
+            const file = e.target?.files?.[0];
+            if (!file) {
+                resolve(null);
+                return;
+            }
+            try {
+                const converted = await ensureImageFormatSupported(file);
+                const base64 = await getBase64Async(converted);
+                resolve(base64);
+            } catch (error) {
+                console.error('Error processing selected image:', error);
+                toastr.error(t`Failed to process selected image: ${error.message}`);
+                resolve(null);
+            }
+        };
+        input.oncancel = () => resolve(null);
+        input.click();
+    });
+}
+
+/**
+ * Resolves avatar data from various input formats (base64, local path, or prompt).
+ * @param {string} input - "prompt" to open file picker, base64 data URL, or local file path
+ * @returns {Promise<string|null>} Base64 data URL or null if invalid/cancelled
+ */
+export async function resolveAvatarData(input) {
+    if (!input || typeof input !== 'string') {
+        return null;
+    }
+
+    const trimmed = input.trim();
+
+    // Special value "prompt" opens file picker
+    if (trimmed.toLowerCase() === 'prompt') {
+        return await promptForAvatarFile();
+    }
+
+    // Already a base64 data URL
+    if (trimmed.startsWith('data:image/')) {
+        return trimmed;
+    }
+
+    // External URLs are not supported
+    if (isExternalUrl(trimmed)) {
+        toastr.warning(t`External URLs are not supported for avatars. Use a local file path or "prompt" to select a file.`);
+        return null;
+    }
+    // Local path or URL (e.g., characters/name.png) - fetch from ST server or same origin
+    // Supported paths: /characters/*, /backgrounds/*, /User Avatars/*, /assets/*, /user/images/*
+    // Also supports same-origin URLs (e.g., https://localhost:8000/characters/name.png)
+    if (trimmed.includes('/') || trimmed.endsWith('.png')) {
+        try {
+            // Construct the URL to fetch the local file
+            let url = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+            // Handle same-origin URLs
+            if (trimmed.startsWith(window.location.origin)) {
+                url = new URL(trimmed).pathname;
+            }
+            // If there is no subfolder, we guess this should be a character image
+            if (!url.includes('/', 1)) {
+                url = '/characters/' + trimmed;
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`File not found or inaccessible: ${response.status}`);
+            }
+            const blob = await response.blob();
+            if (!blob.type.startsWith('image/')) {
+                throw new Error('File is not an image');
+            }
+            const converted = await ensureImageFormatSupported(new File([blob], 'avatar.png', { type: blob.type }));
+            return await getBase64Async(converted);
+        } catch (error) {
+            console.error('Error fetching local avatar:', error);
+            toastr.warning(t`Failed to load avatar from path: ${error.message}`);
+            return null;
+        }
+    }
+
+    // Unknown format
+    console.warn('Unknown avatar format:', trimmed.substring(0, 50));
+    toastr.warning(t`Unknown avatar format. Use "prompt" to select a file, or provide a local file path.`);
+    return null;
+}
+
+/**
+ *  An array of all supported image MIME types.
+ */
+export const supportedImageMimeTypes = Object.freeze([
+    'image/jpeg',
+    'image/png',
+    'image/bmp',
+    'image/tiff',
+    'image/gif',
+    'image/apng',
+    'image/webp',
+    'image/avif',
+]);
+
+/**
  * Ensure that we can import war crime image formats like WEBP and AVIF.
  * @param {File} file Input file
  * @returns {Promise<File>} A promise that resolves to the supported file.
  */
 export async function ensureImageFormatSupported(file) {
-    const supportedTypes = [
-        'image/jpeg',
-        'image/png',
-        'image/bmp',
-        'image/tiff',
-        'image/gif',
-        'image/apng',
-        'image/webp',
-        'image/avif',
-    ];
-
-    if (supportedTypes.includes(file.type) || !file.type.startsWith('image/')) {
+    if (supportedImageMimeTypes.includes(file.type) || !file.type.startsWith('image/')) {
         return file;
     }
 
@@ -2034,6 +2161,23 @@ export function setValueByPath(obj, path, value) {
 }
 
 /**
+ * Deletes a value from a nested object at the given dot-separated path.
+ * @param {object} obj Object to delete from
+ * @param {string} path Dot-separated key path (e.g. "data.extensions.myKey")
+ */
+export function deleteValueByPath(obj, path) {
+    const keyParts = path.split('.');
+    let current = obj;
+    for (let i = 0; i < keyParts.length - 1; i++) {
+        if (!current || typeof current !== 'object') return;
+        current = current[keyParts[i]];
+    }
+    if (current && typeof current === 'object') {
+        delete current[keyParts[keyParts.length - 1]];
+    }
+}
+
+/**
  * Flashes the given HTML element via CSS flash animation for a defined period
  * @param {JQuery<HTMLElement>} element - The element to flash
  * @param {number} timespan - A number in milliseconds how the flash should last (default is 2000ms.  Multiples of 1000ms work best, as they end with the flash animation being at 100% opacity)
@@ -2294,7 +2438,6 @@ export function highlightRegex(regexStr) {
                 flags: new RegExp('(?<=\\/)([gimsuy]*)$', 'g'),  // Match trailing flags
                 delimiters: new RegExp('^\\/|(?<![\\\\<])\\/', 'g'),  // Match leading or trailing delimiters
             };
-
         } catch (error) {
             return {
                 brackets: new RegExp('(\\\\)?\\[.*?\\]', 'g'),  // Non-escaped square brackets
@@ -2440,8 +2583,8 @@ export async function fetchFaFile(name) {
     const sheet = style.sheet;
     style.remove();
     return [...sheet.cssRules]
-        .filter(rule => rule.style?.content)
-        .map(rule => rule.selectorText.split(/,\s*/).map(selector => selector.split('::').shift().slice(1)))
+        .filter(rule => (rule instanceof CSSStyleRule && rule.style?.content))
+        .map(rule => rule['selectorText'].split(/,\s*/).map(selector => selector.split('::').shift().slice(1)))
     ;
 }
 
@@ -2736,6 +2879,33 @@ export function versionCompare(srcVersion, minVersion) {
 }
 
 /**
+ * Logs a warning to the console for slash command executions.
+ * Strips internal arguments (starting with '_') from the args object for cleaner logging.
+ * @param {string} message - The warning message to log.
+ * @param {Object} args - The arguments object from the slash command, including named arguments and internal values.
+ * @param {{[unnamedArgName: string]: string}} [valueObj=null] - The user-built object containing context for the warning (e.g., { uid: uid }).
+ * @returns {void}
+ */
+export function logSlashCommandWarn(message, args, valueObj = null) {
+    if (valueObj !== null && valueObj !== undefined) {
+        console.warn(message, valueObj, stripInternalArgs(args));
+    } else {
+        console.warn(message, stripInternalArgs(args));
+    }
+    return;
+    function stripInternalArgs(args) {
+        // strip all args/properties that start with an underscore
+        const result = {};
+        for (const [key, value] of Object.entries(args)) {
+            if (!key.startsWith('_')) {
+                result[key] = value;
+            }
+        }
+        return result;
+    }
+}
+
+/**
  * Sets up the scroll-to-top button functionality.
  * @param {object} params Parameters object
  * @param {string} params.scrollContainerId Scrollable container element ID
@@ -2895,4 +3065,48 @@ export function createTimeout(ms, errorMessage = '') {
     return new Promise((_, reject) => {
         setTimeout(() => reject(new Error(errorMessage)), ms);
     });
+}
+
+/**
+ * Registers a long-press (touch hold) event as an alternative to modifier+click.
+ * Supports event delegation for dynamically created elements.
+ * @param {string} selector CSS selector for target elements
+ * @param {(e: TouchEvent) => void} callback Callback to invoke on long-press, `this` is the matched element
+ * @param {number} [delay=500] Long-press duration in ms
+ */
+export function addLongPressEvent(selector, callback, delay = 500) {
+    let timer = null;
+    let fired = false;
+    let target = null;
+
+    document.addEventListener('touchstart', function (event) {
+        if (!(event.target instanceof Element)) return;
+        const el = event.target.closest(selector);
+        if (!el) return;
+        target = el;
+        fired = false;
+        timer = setTimeout(() => {
+            fired = true;
+            event.preventDefault();
+            callback.call(el, event);
+        }, delay);
+    }, { passive: false });
+
+    document.addEventListener('touchend', cancelTimer);
+    document.addEventListener('touchmove', cancelTimer);
+    document.addEventListener('touchcancel', cancelTimer);
+
+    document.addEventListener('click', function (event) {
+        if (fired && target && target.contains(event.target)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            fired = false;
+            target = null;
+        }
+    }, true);
+
+    function cancelTimer() {
+        clearTimeout(timer);
+        timer = null;
+    }
 }
