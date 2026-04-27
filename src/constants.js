@@ -484,6 +484,8 @@ export const OPENAI_REASONING_EFFORT_MODELS = [
 
 export const OPENAI_REASONING_EFFORT_MAP = {
     min: 'minimal',
+    max: 'high',
+    xhigh: 'high',
 };
 
 /**
@@ -500,6 +502,7 @@ export const NANOGPT_REASONING_EFFORT_MAP = {
     medium: 'low',
     high: 'medium',
     max: 'high',
+    xhigh: 'high',
 };
 
 export const LOG_LEVELS = {

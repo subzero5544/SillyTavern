@@ -242,6 +242,7 @@ export const reasoning_effort_types = {
     high: 'high',
     min: 'min',
     max: 'max',
+    xhigh: 'xhigh',
 };
 
 export const verbosity_levels = {
@@ -2526,6 +2527,7 @@ function getReasoningEffort(settings = null, model = null) {
                 case reasoning_effort_types.auto:
                     return undefined;
                 case reasoning_effort_types.max:
+                case reasoning_effort_types.xhigh:
                     return reasoning_effort_types.max;
                 default:
                     return reasoning_effort_types.high;
@@ -2544,6 +2546,7 @@ function getReasoningEffort(settings = null, model = null) {
                     ? reasoning_effort_types.min
                     : reasoning_effort_types.low;
             case reasoning_effort_types.max:
+            case reasoning_effort_types.xhigh:
                 return reasoning_effort_types.high;
             default:
                 return settings.reasoning_effort;

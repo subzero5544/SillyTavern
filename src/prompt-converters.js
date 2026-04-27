@@ -10,6 +10,7 @@ const REASONING_EFFORT = {
     high: 'high',
     min: 'min',
     max: 'max',
+    xhigh: 'xhigh',
 };
 
 export const PROMPT_PROCESSING_TYPE = {
@@ -1243,10 +1244,11 @@ export function cachingSystemPromptForOpenRouter(messages, ttl = undefined) {
  * @param {string} reasoningEffort Reasoning effort
  * @param {boolean} stream If streaming is enabled
  * @param {boolean} isAdaptiveModel If the model supports adaptive thinking (Opus 4.6+)
+ * @param {string} model Model name
  * @returns {number|string|null} Budget tokens, effort string, or null
  */
-export function calculateClaudeBudgetTokens(maxTokens, reasoningEffort, stream, isAdaptiveModel) {
-    // Adaptive thinking for Opus 4.6+: return effort string (like Gemini 3)
+export function calculateClaudeBudgetTokens(maxTokens, reasoningEffort, stream, isAdaptiveModel, model = '') {
+    // Adaptive thinking returns effort strings; xhigh is currently Opus 4.7-only.
     if (isAdaptiveModel) {
         switch (reasoningEffort) {
             case REASONING_EFFORT.auto:
@@ -1261,11 +1263,13 @@ export function calculateClaudeBudgetTokens(maxTokens, reasoningEffort, stream, 
                 return 'high';
             case REASONING_EFFORT.max:
                 return 'max';
+            case REASONING_EFFORT.xhigh:
+                return /^claude-(opus-4-7)/.test(model) ? 'xhigh' : 'max';
         }
         return null;
     }
 
-    let budgetTokens = 0;
+    let budgetTokens;
 
     switch (reasoningEffort) {
         case REASONING_EFFORT.auto:
@@ -1285,6 +1289,11 @@ export function calculateClaudeBudgetTokens(maxTokens, reasoningEffort, stream, 
         case REASONING_EFFORT.max:
             budgetTokens = Math.floor(maxTokens * 0.95);
             break;
+        case REASONING_EFFORT.xhigh:
+            budgetTokens = Math.floor(maxTokens * 0.98);
+            break;
+        default:
+            return null;
     }
 
     budgetTokens = Math.max(budgetTokens, 1024);
@@ -1322,6 +1331,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
                 budgetTokens = Math.floor(maxTokens * 0.5);
                 break;
             case REASONING_EFFORT.max:
+            case REASONING_EFFORT.xhigh:
                 budgetTokens = maxTokens;
                 break;
         }
@@ -1349,6 +1359,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
                 budgetTokens = Math.floor(maxTokens * 0.5);
                 break;
             case REASONING_EFFORT.max:
+            case REASONING_EFFORT.xhigh:
                 budgetTokens = maxTokens;
                 break;
         }
@@ -1377,6 +1388,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
                 budgetTokens = Math.floor(maxTokens * 0.5);
                 break;
             case REASONING_EFFORT.max:
+            case REASONING_EFFORT.xhigh:
                 budgetTokens = maxTokens;
                 break;
         }
@@ -1399,6 +1411,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
             case REASONING_EFFORT.high:
                 return 'high';
             case REASONING_EFFORT.max:
+            case REASONING_EFFORT.xhigh:
                 return 'high';
         }
 
@@ -1418,6 +1431,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
             case REASONING_EFFORT.high:
                 return 'high';
             case REASONING_EFFORT.max:
+            case REASONING_EFFORT.xhigh:
                 return 'high';
         }
 

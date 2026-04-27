@@ -111,11 +111,17 @@ describe('calculateClaudeBudgetTokens', () => {
         test('medium returns "medium"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'medium', true, true)).toBe('medium'));
         test('high returns "high"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'high', true, true)).toBe('high'));
         test('max returns "max"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'max', true, true)).toBe('max'));
+        test('xhigh returns "xhigh" for Opus 4.7', () => expect(mod.calculateClaudeBudgetTokens(8192, 'xhigh', true, true, 'claude-opus-4-7')).toBe('xhigh'));
+        test('xhigh falls back to "max" for adaptive models without xhigh', () => expect(mod.calculateClaudeBudgetTokens(8192, 'xhigh', true, true, 'claude-opus-4-6')).toBe('max'));
     });
 
     describe('traditional model', () => {
         test('auto returns null', () => {
             expect(mod.calculateClaudeBudgetTokens(8192, 'auto', true, false)).toBeNull();
+        });
+
+        test('unknown values return null', () => {
+            expect(mod.calculateClaudeBudgetTokens(8192, 'unsupported', true, false)).toBeNull();
         });
 
         test('min returns 1024 regardless of maxTokens', () => {
@@ -139,6 +145,10 @@ describe('calculateClaudeBudgetTokens', () => {
 
         test('max is 95% of maxTokens', () => {
             expect(mod.calculateClaudeBudgetTokens(40000, 'max', true, false)).toBe(38000);
+        });
+
+        test('xhigh is 98% of maxTokens', () => {
+            expect(mod.calculateClaudeBudgetTokens(40000, 'xhigh', true, false)).toBe(39200);
         });
 
         test('non-streaming caps at 21333', () => {
