@@ -1,10 +1,10 @@
 {
-    "name": "SillyTavern",
-    "short_name": "SillyTavern",
+    "name": "Wulf's Hollow",
+    "short_name": "Wulf's Hollow",
     "start_url": "/",
     "display": "standalone",
-    "theme_color": "#202124",
-    "background_color": "#202124",
+    "theme_color": "#1f232a",
+    "background_color": "#1f232a",
     "icons": [
         {
             "src": "img/apple-icon-57x57.png",

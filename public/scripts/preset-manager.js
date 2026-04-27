@@ -1238,6 +1238,6 @@ export async function initPresetManager() {
         }
 
         const shortDate = new Date().toISOString().split('T')[0];
-        download(data, `ST-formatting-${shortDate}.json`, 'application/json');
+        download(data, `wulfs-hollow-formatting-${shortDate}.json`, 'application/json');
     });
 }

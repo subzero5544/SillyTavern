@@ -631,8 +631,8 @@ async function activateExtensions() {
                 extensionLoadErrors.add(t`Extension "${displayName}" did not load. Missing required extensions: "${missingDependencies.join(', ')}"`);
             }
         } else if (!meetsClientMinimumVersion && !isDisabled) {
-            console.warn(t`Extension "${name}" did not load. Requires ST client version ${minClientVersion}, but current version is ${clientVersion}.`);
-            extensionLoadErrors.add(t`Extension "${displayName}" did not load. Requires ST client version ${minClientVersion}, but current version is ${clientVersion}.`);
+            console.warn(t`Extension "${name}" did not load. Requires Wulf's Hollow client version ${minClientVersion}, but current version is ${clientVersion}.`);
+            extensionLoadErrors.add(t`Extension "${displayName}" did not load. Requires Wulf's Hollow client version ${minClientVersion}, but current version is ${clientVersion}.`);
         }
     }
 

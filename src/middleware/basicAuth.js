@@ -14,7 +14,7 @@ const ENABLE_ACCOUNTS = getConfigValue('enableUserAccounts', false, 'boolean');
 const basicAuthMiddleware = async function (request, response, callback) {
     const unauthorizedWebpage = safeReadFileSync(path.join(globalThis.DATA_ROOT, '_errors', 'unauthorized.html')) ?? '';
     const unauthorizedResponse = (res) => {
-        res.set('WWW-Authenticate', 'Basic realm="SillyTavern", charset="UTF-8"');
+        res.set('WWW-Authenticate', 'Basic realm="Wulf\'s Hollow", charset="UTF-8"');
         return res.status(401).send(unauthorizedWebpage);
     };
 

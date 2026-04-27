@@ -2557,11 +2557,11 @@ function registerTagsSlashCommands() {
             }),
             SlashCommandNamedArgument.fromProps({
                 name: 'mode',
-                description: t`Import mode: "all" imports all tags, "existing" imports only existing ST tags, "none" skips import, "ask" shows the import popup (default: uses your saved setting)`,
+                description: t`Import mode: "all" imports all tags, "existing" imports only existing Wulf's Hollow tags, "none" skips import, "ask" shows the import popup (default: uses your saved setting)`,
                 typeList: [ARGUMENT_TYPE.STRING],
                 enumList: [
                     new SlashCommandEnumValue('all', t`Import all tags (create new ones if needed)`, enumTypes.enum),
-                    new SlashCommandEnumValue('existing', t`Import only existing ST tags`, enumTypes.enum),
+                    new SlashCommandEnumValue('existing', t`Import only existing Wulf's Hollow tags`, enumTypes.enum),
                     new SlashCommandEnumValue('none', t`Skip import`, enumTypes.enum),
                     new SlashCommandEnumValue('ask', t`Show the import popup`, enumTypes.enum),
                 ],
@@ -2569,10 +2569,10 @@ function registerTagsSlashCommands() {
         ],
         helpString: `
         <div>
-            ${t`Imports character card tags as SillyTavern tags for folder/filter use.`}
+            ${t`Imports character card tags as Wulf's Hollow tags for folder/filter use.`}
         </div>
         <div>
-            ${t`Character cards can have embedded tags (set via <code>tags</code> argument in <code>/char-create</code> or <code>/char-update</code>). This command imports those embedded tags as ST tags that can be used for filtering and organizing characters.`}
+            ${t`Character cards can have embedded tags (set via <code>tags</code> argument in <code>/char-create</code> or <code>/char-update</code>). This command imports those embedded tags as Wulf's Hollow tags that can be used for filtering and organizing characters.`}
         </div>
         <div>
             ${t`If no mode is specified, uses your saved tag import setting from preferences.`}
@@ -2586,7 +2586,7 @@ function registerTagsSlashCommands() {
                 </li>
                 <li>
                     <pre><code>/tag-import name="Alice" mode=all</code></pre>
-                    ${t`Imports all of Alice's card tags, creating new ST tags if needed.`}
+                    ${t`Imports all of Alice's card tags, creating new Wulf's Hollow tags if needed.`}
                 </li>
             </ul>
         </div>

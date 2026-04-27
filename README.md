@@ -1,4 +1,4 @@
-# SillyTavern
+# Wulf's Hollow
 
 LLM Frontend for Power Users
 

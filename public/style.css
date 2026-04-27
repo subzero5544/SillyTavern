@@ -68,21 +68,21 @@
 
 
     /*Default Theme, will be changed by ToolCool Color Picker*/
-    --SmartThemeBodyColor: rgb(220, 220, 210);
-    --SmartThemeEmColor: rgb(145, 145, 145);
-    --SmartThemeUnderlineColor: rgb(188, 231, 207);
-    --SmartThemeQuoteColor: rgb(225, 138, 36);
+    --SmartThemeBodyColor: rgb(204, 211, 219);
+    --SmartThemeEmColor: rgb(132, 144, 158);
+    --SmartThemeUnderlineColor: rgb(132, 164, 204);
+    --SmartThemeQuoteColor: rgb(92, 138, 205);
     /* --SmartThemeFastUIBGColor: rgba(0, 0, 0, 0.9); */
-    --SmartThemeBlurTintColor: rgba(23, 23, 23, 1);
-    --SmartThemeChatTintColor: rgba(23, 23, 23, 1);
-    --SmartThemeUserMesBlurTintColor: rgba(0, 0, 0, 0.3);
-    --SmartThemeBotMesBlurTintColor: rgba(60, 60, 60, 0.3);
+    --SmartThemeBlurTintColor: rgba(31, 35, 42, 1);
+    --SmartThemeChatTintColor: rgba(31, 35, 42, 1);
+    --SmartThemeUserMesBlurTintColor: rgba(34, 48, 68, 0.9);
+    --SmartThemeBotMesBlurTintColor: rgba(34, 38, 45, 0.9);
     --SmartThemeBlurStrength: calc(var(--blurStrength) * 1px);
-    --SmartThemeShadowColor: rgba(0, 0, 0, 0.5);
-    --SmartThemeBorderColor: rgba(0, 0, 0, 0.5);
+    --SmartThemeShadowColor: rgba(12, 15, 20, 1);
+    --SmartThemeBorderColor: rgba(54, 65, 80, 1);
     --SmartThemeCheckboxBgColorR: 220;
-    --SmartThemeCheckboxBgColorG: 220;
-    --SmartThemeCheckboxBgColorB: 210;
+    --SmartThemeCheckboxBgColorG: 224;
+    --SmartThemeCheckboxBgColorB: 230;
     --SmartThemeCheckboxTickColorValue: calc(((((var(--SmartThemeCheckboxBgColorR) * 299) + (var(--SmartThemeCheckboxBgColorG) * 587) + (var(--SmartThemeCheckboxBgColorB) * 114)) / 1000) - 128) * -1000);
     --SmartThemeCheckboxTickColor: rgb(var(--SmartThemeCheckboxTickColorValue),
             var(--SmartThemeCheckboxTickColorValue),
@@ -359,7 +359,8 @@ input[type='checkbox']:focus-visible {
     opacity: 0.7;
 }
 
-.mes[is_system="true"][ch_name="SillyTavern System"] .mes_text br {
+.mes[is_system="true"][ch_name="SillyTavern System"] .mes_text br,
+.mes[is_system="true"][ch_name="Wulf's Hollow System"] .mes_text br {
     display: none;
 }
 

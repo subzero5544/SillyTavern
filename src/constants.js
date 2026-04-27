@@ -361,17 +361,17 @@ export const DEFAULT_AVATAR_PATH = './public/img/ai4.png';
 
 export const OPENROUTER_HEADERS = {
     'HTTP-Referer': 'https://sillytavern.app',
-    'X-Title': 'SillyTavern',
+    'X-Title': 'Wulf\'s Hollow',
 };
 
 export const AIMLAPI_HEADERS = {
     'HTTP-Referer': 'https://sillytavern.app',
-    'X-Title': 'SillyTavern',
+    'X-Title': 'Wulf\'s Hollow',
 };
 
 export const FEATHERLESS_HEADERS = {
     'HTTP-Referer': 'https://sillytavern.app',
-    'X-Title': 'SillyTavern',
+    'X-Title': 'Wulf\'s Hollow',
 };
 
 export const OPENROUTER_KEYS = [

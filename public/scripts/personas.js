@@ -2490,7 +2490,7 @@ function registerPersonaSlashCommands() {
         }),
         SlashCommandNamedArgument.fromProps({
             name: 'avatar',
-            description: t`Avatar image. Use "prompt" to open file picker, or provide a local ST file path or base64 data URL. Can also be the return value of /imagine.`,
+            description: t`Avatar image. Use "prompt" to open file picker, or provide a local Wulf's Hollow file path or base64 data URL. Can also be the return value of /imagine.`,
             typeList: [ARGUMENT_TYPE.STRING],
             isRequired: requiredFields.includes('avatar'),
             enumList: [
@@ -2578,7 +2578,7 @@ function registerPersonaSlashCommands() {
         </div>
         <div>
             <strong>${t`Note on avatar:`}</strong>
-            ${t`The <code>avatar</code> argument accepts <code>prompt</code> to open a file picker, a local ST file path, or a base64 data URL. Can also be the return value of <code>/imagine</code>. If not provided, a default avatar will be used.`}
+            ${t`The <code>avatar</code> argument accepts <code>prompt</code> to open a file picker, a local Wulf's Hollow file path, or a base64 data URL. Can also be the return value of <code>/imagine</code>. If not provided, a default avatar will be used.`}
         </div>
         <div>
             <strong>${t`Example:`}</strong>

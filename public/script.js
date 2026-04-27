@@ -110,6 +110,9 @@ import {
     proxies,
     loadProxyPresets,
     selected_proxy,
+    custom_endpoint_presets,
+    loadCustomEndpointPresets,
+    selected_custom_endpoint,
     initOpenAI,
 } from './scripts/openai.js';
 
@@ -401,7 +404,7 @@ export let converter;
 
 // array for prompt token calculations
 
-export const systemUserName = 'SillyTavern System';
+export const systemUserName = 'Wulf\'s Hollow System';
 export const neutralCharacterName = 'Assistant';
 let default_user_name = 'User';
 export let name1 = default_user_name;
@@ -419,7 +422,7 @@ export let isChatSaving = false;
 let firstRun = false;
 export let settingsReady = false;
 let currentVersion = '0.0.0';
-export let displayVersion = 'SillyTavern';
+export let displayVersion = 'Wulf\'s Hollow';
 
 let generation_started = new Date();
 /** @type {Character[]} */
@@ -434,7 +437,7 @@ export const default_avatar = 'img/ai4.png';
 export const system_avatar = 'img/five.png';
 export const comment_avatar = 'img/quill.png';
 export const default_user_avatar = 'img/user-default.png';
-export let CLIENT_VERSION = 'SillyTavern:UNKNOWN:Cohee#1207'; // For Horde header
+export let CLIENT_VERSION = 'WulfsHollow:UNKNOWN:Cohee#1207'; // For Horde header
 let optionsPopper = Popper.createPopper(document.getElementById('options_button'), document.getElementById('options'), {
     placement: 'top-start',
 });
@@ -506,7 +509,7 @@ async function getClientVersion() {
         const response = await fetch('/version');
         const data = await response.json();
         CLIENT_VERSION = data.agent;
-        displayVersion = `SillyTavern ${data.pkgVersion}`;
+        displayVersion = `Wulf's Hollow ${data.pkgVersion}`;
         currentVersion = data.pkgVersion;
 
         if (data.gitRevision && data.gitBranch) {
@@ -707,9 +710,9 @@ async function firstLoadInit() {
 
     const splashLogo = document.createElement('img');
     splashLogo.src = '/img/logo.png';
-    splashLogo.alt = 'SillyTavern';
+    splashLogo.alt = 'Wulf\'s Hollow';
     splashLogo.className = 'splash-logo';
-    splashLogo.ariaLabel = t`SillyTavern Logo`;
+    splashLogo.ariaLabel = t`Wulf's Hollow Logo`;
 
     const splashMessage = document.createElement('h2');
     splashMessage.className = 'splash-message';
@@ -4279,7 +4282,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (!pingResult) {
             unblockGeneration(type);
-            toastr.error(t`Verify that the server is running and accessible.`, t`ST Server cannot be reached`);
+            toastr.error(t`Verify that the server is running and accessible.`, t`Wulf's Hollow server cannot be reached`);
             throw new Error('Server unreachable');
         }
 
@@ -7909,6 +7912,7 @@ export async function getSettings(initLoaderHandle = null) {
 
         // Load proxy presets
         loadProxyPresets(settings);
+        loadCustomEndpointPresets(settings);
 
         // Allow subscribers to mutate settings
         await eventSource.emit(event_types.SETTINGS_LOADED_AFTER, settings);
@@ -8014,6 +8018,8 @@ export async function saveSettings(loopCounter = 0) {
         background: background_settings,
         proxies: proxies,
         selected_proxy: selected_proxy,
+        custom_endpoint_presets: custom_endpoint_presets,
+        selected_custom_endpoint: selected_custom_endpoint,
     };
 
     try {
@@ -11181,7 +11187,7 @@ function addDebugFunctions() {
         toastr.info('Regenerate warning is now ' + (accountStorage.getItem('RegenerateWithCtrlEnter') === 'true' ? 'disabled' : 'enabled'));
     });
 
-    registerDebugFunction('copySetup', 'Copy ST setup to clipboard [WIP]', 'Useful data when reporting bugs', async () => {
+    registerDebugFunction('copySetup', 'Copy Wulf\'s Hollow setup to clipboard [WIP]', 'Useful data when reporting bugs', async () => {
         const getContextContents = getContext();
         const getSettingsContents = settings;
         //console.log(getSettingsContents);
@@ -11202,9 +11208,9 @@ API Settings: ${JSON.stringify(getSettingsContents[getSettingsContents.main_api 
 
         try {
             await copyText(logMessage);
-            toastr.info('Your ST API setup data has been copied to the clipboard.');
+            toastr.info('Your Wulf\'s Hollow API setup data has been copied to the clipboard.');
         } catch (error) {
-            toastr.error('Failed to copy ST Setup to clipboard:', error);
+            toastr.error('Failed to copy Wulf\'s Hollow setup to clipboard:', error);
         }
     });
 }
@@ -12266,7 +12272,7 @@ jQuery(async function () {
             }
 
             if (selected_group && format === 'json') {
-                toastr.warning(t`Only SillyTavern's own format is supported for group chat imports. Sorry!`);
+                toastr.warning(t`Only Wulf's Hollow format is supported for group chat imports. Sorry!`);
                 continue;
             }
 

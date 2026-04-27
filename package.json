@@ -106,7 +106,7 @@
             "whatwg-url": "^14.0.0"
         }
     },
-    "name": "sillytavern",
+    "name": "wulfs-hollow",
     "type": "module",
     "license": "AGPL-3.0",
     "repository": {

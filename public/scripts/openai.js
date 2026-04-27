@@ -522,6 +522,15 @@ export let proxies = [
 ];
 export let selected_proxy = proxies[0];
 
+export let custom_endpoint_presets = [
+    {
+        name: 'None',
+        url: '',
+        model: '',
+    },
+];
+export let selected_custom_endpoint = custom_endpoint_presets[0];
+
 export let openai_setting_names;
 export let openai_settings;
 
@@ -6362,6 +6371,149 @@ function runProxyCallback(_, value) {
 }
 
 /**
+ * Custom endpoint presets.
+ */
+export function loadCustomEndpointPresets(settings) {
+    let endpointPresets = settings.custom_endpoint_presets;
+    const savedSelectedEndpoint = settings.selected_custom_endpoint;
+    selected_custom_endpoint = savedSelectedEndpoint || selected_custom_endpoint;
+
+    if (!Array.isArray(endpointPresets) || endpointPresets.length === 0) {
+        endpointPresets = custom_endpoint_presets;
+    } else {
+        custom_endpoint_presets = endpointPresets.map(preset => ({
+            name: String(preset.name ?? ''),
+            url: String(preset.url ?? ''),
+            model: String(preset.model ?? ''),
+        })).filter(preset => preset.name);
+
+        if (!custom_endpoint_presets.some(preset => preset.name === 'None')) {
+            custom_endpoint_presets.unshift({ name: 'None', url: '', model: '' });
+        }
+
+        endpointPresets = custom_endpoint_presets;
+    }
+
+    $('#custom_endpoint_preset').empty();
+
+    for (const preset of endpointPresets) {
+        const option = document.createElement('option');
+        option.innerText = preset.name;
+        option.value = preset.name;
+        option.selected = preset.name === 'None';
+        $('#custom_endpoint_preset').append(option);
+    }
+
+    const matchingPreset = savedSelectedEndpoint
+        ? endpointPresets.find(preset => preset.name === savedSelectedEndpoint.name)
+        : null;
+
+    if (matchingPreset) {
+        $('#custom_endpoint_preset').val(matchingPreset.name);
+        setCustomEndpointPreset(matchingPreset.name, matchingPreset.url, matchingPreset.model);
+    } else {
+        selected_custom_endpoint = endpointPresets.find(preset => preset.name === 'None') || endpointPresets[0];
+        $('#custom_endpoint_preset').val(selected_custom_endpoint?.name || 'None');
+        $('#custom_endpoint_name').val(selected_custom_endpoint?.name || 'None');
+    }
+}
+
+function setCustomEndpointPreset(name, url, model) {
+    const preset = custom_endpoint_presets.find(p => p.name === name);
+    if (preset) {
+        preset.url = url;
+        preset.model = model;
+        selected_custom_endpoint = preset;
+    } else {
+        const newEndpoint = { name, url, model };
+        custom_endpoint_presets.push(newEndpoint);
+        selected_custom_endpoint = newEndpoint;
+    }
+
+    $('#custom_endpoint_name').val(name);
+    oai_settings.custom_url = url;
+    $('#custom_api_url_text').val(oai_settings.custom_url);
+    oai_settings.custom_model = model;
+    $('#custom_model_id').val(oai_settings.custom_model);
+    $('#model_custom_select').val(oai_settings.custom_model);
+    reconnectOpenAi();
+}
+
+function onCustomEndpointPresetChange() {
+    const value = String($('#custom_endpoint_preset').find(':selected').val());
+    const selectedPreset = custom_endpoint_presets.find(preset => preset.name === value);
+
+    if (selectedPreset) {
+        setCustomEndpointPreset(selectedPreset.name, selectedPreset.url, selectedPreset.model);
+    } else {
+        console.error(t`Custom endpoint preset '${value}' not found in presets array.`);
+    }
+    saveSettingsDebounced();
+}
+
+$('#save_custom_endpoint').on('click', async function () {
+    const endpointName = String($('#custom_endpoint_name').val()).trim();
+    const customUrl = String($('#custom_api_url_text').val()).trim();
+    const customModel = String($('#custom_model_id').val()).trim();
+
+    if (!endpointName) {
+        toastr.error(t`Enter a name for this Custom endpoint preset.`);
+        return;
+    }
+
+    setCustomEndpointPreset(endpointName, customUrl, customModel);
+    saveSettingsDebounced();
+    toastr.success(t`Custom Endpoint Saved`);
+
+    if ($('#custom_endpoint_preset').val() !== endpointName) {
+        const option = document.createElement('option');
+        option.text = endpointName;
+        option.value = endpointName;
+
+        $('#custom_endpoint_preset').append(option);
+    }
+    $('#custom_endpoint_preset').val(endpointName);
+});
+
+$('#delete_custom_endpoint').on('click', async function () {
+    const endpointName = String($('#custom_endpoint_name').val()).trim();
+
+    if (endpointName === 'None') {
+        toastr.warning(t`The default Custom endpoint preset cannot be deleted.`);
+        return;
+    }
+
+    const index = custom_endpoint_presets.findIndex(preset => preset.name === endpointName);
+
+    if (index !== -1) {
+        custom_endpoint_presets.splice(index, 1);
+        $('#custom_endpoint_preset option').filter(function () {
+            return $(this).val() === endpointName;
+        }).remove();
+
+        if (custom_endpoint_presets.length > 0) {
+            const newIndex = Math.max(0, index - 1);
+            selected_custom_endpoint = custom_endpoint_presets[newIndex];
+        } else {
+            selected_custom_endpoint = { name: 'None', url: '', model: '' };
+            custom_endpoint_presets.push(selected_custom_endpoint);
+        }
+
+        $('#custom_endpoint_name').val(selected_custom_endpoint.name);
+        oai_settings.custom_url = selected_custom_endpoint.url;
+        $('#custom_api_url_text').val(selected_custom_endpoint.url);
+        oai_settings.custom_model = selected_custom_endpoint.model;
+        $('#custom_model_id').val(selected_custom_endpoint.model);
+
+        saveSettingsDebounced();
+        $('#custom_endpoint_preset').val(selected_custom_endpoint.name);
+        toastr.success(t`Custom Endpoint Deleted`);
+    } else {
+        toastr.error(t`Could not find Custom endpoint preset '${endpointName}'`);
+    }
+});
+
+/**
  * Handle Vertex AI authentication mode change
  */
 function onVertexAIAuthModeChange() {
@@ -7070,6 +7222,7 @@ export function initOpenAI() {
 
     $('#api_button_openai').on('click', onConnectButtonClick);
     $('#openai_reverse_proxy').on('input', onReverseProxyInput);
+    $('#custom_endpoint_preset').on('change', onCustomEndpointPresetChange);
     $('#model_openai_select').on('change', onModelChange);
     $('#model_claude_select').on('change', onModelChange);
     $('#model_google_select').on('change', onModelChange);
