@@ -1916,7 +1916,7 @@
                                             <input type="hidden" id="names_behavior" class="displayNone" />
                                         </div>
                                     </div>
-                                    <div class="inline-drawer wide100p flexFlowColumn marginBot10">
+                                    <div class="inline-drawer wide100p flexFlowColumn">
                                         <div class="inline-drawer-toggle inline-drawer-header">
                                             <div class="flex-container alignItemsCenter">
                                                 <b data-i18n="Continue Postfix">Continue Postfix</b>
@@ -1946,6 +1946,18 @@
                                             <input type="hidden" id="continue_postfix" class="displayNone" />
                                         </div>
                                     </div>
+                                    <div id="openai_advanced_options_drawer" class="inline-drawer wide100p flexFlowColumn marginBot10">
+                                        <div class="inline-drawer-toggle inline-drawer-header">
+                                            <div class="flex-container alignItemsCenter">
+                                                <b data-i18n="Advanced Chat Completion Options">Advanced Chat Completion Options</b>
+                                                <span data-i18n="[title]Contains continue prefill, system handling, tools, media, and reasoning settings." title="Contains continue prefill, system handling, tools, media, and reasoning settings." class="opacity50p fa-solid fa-circle-info"></span>
+                                                <small class="flexBasis100p" data-i18n="Continue prefill, tools, media, reasoning">
+                                                    Continue prefill, tools, media, reasoning
+                                                </small>
+                                            </div>
+                                            <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                        </div>
+                                        <div class="inline-drawer-content">
                                     <div class="range-block">
                                         <label for="continue_prefill" class="checkbox_label widthFreeExpand">
                                             <input id="continue_prefill" type="checkbox" />
@@ -2218,6 +2230,8 @@
                                         <div id="claude_function_prefill_warning">
                                             <i class="fa-solid fa-circle-info"></i>
                                             <span>Prefills won't work when function calling is enabled and any tools are registered.</span>
+                                        </div>
+                                    </div>
                                         </div>
                                     </div>
                                 </div>

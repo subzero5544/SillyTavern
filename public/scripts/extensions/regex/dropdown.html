@@ -87,8 +87,12 @@
             </div>
             <hr />
             <div id="global_scripts_block">
-                <div>
-                    <strong data-i18n="ext_regex_global_scripts">Global Scripts</strong>
+                <div class="flex-container alignItemsBaseline">
+                    <strong class="flex1" data-i18n="ext_regex_global_scripts">Global Scripts</strong>
+                    <div id="create_global_regex_folder" class="menu_button menu_button_icon" title="Create folder" data-i18n="[title]Create folder">
+                        <i class="fa-solid fa-folder-plus"></i>
+                        <small data-i18n="Folder">Folder</small>
+                    </div>
                 </div>
                 <small data-i18n="ext_regex_global_scripts_desc">
                     Available for all characters. Saved to local settings.
@@ -99,6 +103,10 @@
             <div id="preset_scripts_block">
                 <div class="flex-container alignItemsBaseline">
                     <strong class="flex1" data-i18n="ext_regex_preset_scripts">Preset Scripts</strong>
+                    <div id="create_preset_regex_folder" class="menu_button menu_button_icon" title="Create folder" data-i18n="[title]Create folder">
+                        <i class="fa-solid fa-folder-plus"></i>
+                        <small data-i18n="Folder">Folder</small>
+                    </div>
                     <label id="toggle_preset_regex" class="checkbox flex-container" for="regex_preset_toggle">
                         <input type="checkbox" id="regex_preset_toggle" class="enable_scoped" />
                         <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" data-i18n="[title]ext_regex_disallow_preset" title="Disallow using preset regex"></span>
@@ -114,6 +122,10 @@
             <div id="scoped_scripts_block">
                 <div class="flex-container alignItemsBaseline">
                     <strong class="flex1" data-i18n="ext_regex_scoped_scripts">Scoped Scripts</strong>
+                    <div id="create_scoped_regex_folder" class="menu_button menu_button_icon" title="Create folder" data-i18n="[title]Create folder">
+                        <i class="fa-solid fa-folder-plus"></i>
+                        <small data-i18n="Folder">Folder</small>
+                    </div>
                     <label id="toggle_scoped_regex" class="checkbox flex-container" for="regex_scoped_toggle">
                         <input type="checkbox" id="regex_scoped_toggle" class="enable_scoped" />
                         <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" data-i18n="[title]ext_regex_disallow_scoped" title="Disallow using scoped regex"></span>

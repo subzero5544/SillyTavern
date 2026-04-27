@@ -24,6 +24,51 @@
     text-align: center;
 }
 
+.regex-folder {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    margin: 4px 0;
+    overflow: hidden;
+}
+
+.regex-folder-header {
+    align-items: center;
+    background-color: var(--black30a);
+    padding: 4px 6px;
+}
+
+.regex-folder-name {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.regex-folder-count {
+    opacity: 0.65;
+    white-space: nowrap;
+}
+
+.regex-folder-content {
+    margin: 0;
+    min-height: 28px;
+    padding: 4px;
+}
+
+.regex-folder-content:empty::after {
+    content: attr(no-scripts-text);
+    font-size: 0.9em;
+    opacity: 0.6;
+    display: block;
+    text-align: center;
+}
+
+.regex-folder.collapsed .regex-folder-content {
+    display: none;
+}
+
+.regex_settings:not(:has(#regex_bulk_edit:checked)) .regex-folder-move-selected {
+    display: none;
+}
+
 #scoped_scripts_block,
 #preset_scripts_block {
     opacity: 1;

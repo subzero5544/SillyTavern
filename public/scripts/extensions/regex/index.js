@@ -44,6 +44,13 @@ const sanitizeFileName = name => name.replace(/[\s.<>:"/\\|?*\x00-\x1F\x7F]/g, '
  * @property {string[]} preset - List of enabled preset regex script IDs
  */
 
+/**
+ * @typedef {object} RegexFolder
+ * @property {string} id - UUID of the regex folder
+ * @property {string} name - Display name of the regex folder
+ * @property {boolean} collapsed - Whether the folder is collapsed in the UI
+ */
+
 class RegexPresetManager {
     /** @type {HTMLSelectElement} */
     presetSelect = null;
@@ -476,6 +483,60 @@ class RegexPresetManager {
 }
 
 const presetManager = new RegexPresetManager();
+const REGEX_FOLDER_TYPES = Object.values(SCRIPT_TYPES);
+
+/**
+ * Ensures regex folder settings exist for all script types.
+ * @returns {void}
+ */
+function ensureRegexFolderState() {
+    if (!extension_settings.regex_folders || typeof extension_settings.regex_folders !== 'object' || Array.isArray(extension_settings.regex_folders)) {
+        extension_settings.regex_folders = {};
+    }
+
+    for (const scriptType of REGEX_FOLDER_TYPES) {
+        if (!Array.isArray(extension_settings.regex_folders[scriptType])) {
+            extension_settings.regex_folders[scriptType] = [];
+        }
+
+        extension_settings.regex_folders[scriptType] = extension_settings.regex_folders[scriptType]
+            .filter(folder => folder && typeof folder.id === 'string')
+            .map(folder => ({
+                id: folder.id,
+                name: String(folder.name || t`Untitled Folder`),
+                collapsed: !!folder.collapsed,
+            }));
+    }
+}
+
+/**
+ * Gets the folder list for a regex script type.
+ * @param {SCRIPT_TYPES} scriptType Script type
+ * @returns {RegexFolder[]} Folder list
+ */
+function getRegexFolders(scriptType) {
+    ensureRegexFolderState();
+    return extension_settings.regex_folders[scriptType] ?? [];
+}
+
+/**
+ * Finds a regex folder by ID.
+ * @param {SCRIPT_TYPES} scriptType Script type
+ * @param {string} folderId Folder ID
+ * @returns {RegexFolder|undefined} Folder data
+ */
+function getRegexFolder(scriptType, folderId) {
+    return getRegexFolders(scriptType).find(folder => folder.id === folderId);
+}
+
+/**
+ * Gets the sortable class for a regex script type.
+ * @param {SCRIPT_TYPES} scriptType Script type
+ * @returns {string} Sortable class name
+ */
+function getRegexSortableClass(scriptType) {
+    return `regex-sortable-type-${scriptType}`;
+}
 
 /**
  * Toggle the icon for the "select all" checkbox in the regex settings.
@@ -621,20 +682,24 @@ async function moveRegexScript(script, toType, fromType = null, saveSettings = t
         return;
     }
     await deleteRegexScript(script.id, fromType, false);
+    delete script.folderId;
     await saveRegexScript(script, -1, toType, saveSettings);
 }
 
 async function loadRegexScripts() {
-    $('#saved_regex_scripts').empty();
-    $('#saved_scoped_scripts').empty();
-    $('#saved_preset_scripts').empty();
+    const globalContainer = $('#saved_regex_scripts');
+    const scopedContainer = $('#saved_scoped_scripts');
+    const presetContainer = $('#saved_preset_scripts');
+    globalContainer.empty().addClass(getRegexSortableClass(SCRIPT_TYPES.GLOBAL));
+    scopedContainer.empty().addClass(getRegexSortableClass(SCRIPT_TYPES.SCOPED));
+    presetContainer.empty().addClass(getRegexSortableClass(SCRIPT_TYPES.PRESET));
     setToggleAllIcon(false);
 
     const scriptTemplate = $(await renderExtensionTemplateAsync('regex', 'scriptTemplate'));
 
     /**
      * Renders a script to the UI.
-     * @param {string} container Container to render the script to
+     * @param {string|JQuery<HTMLElement>} container Container to render the script to
      * @param {import('../../char-data.js').RegexScriptData} script Script data
      * @param {SCRIPT_TYPES} scriptType Type of the script
      * @param {number} index Index of the script in the array
@@ -744,14 +809,287 @@ async function loadRegexScripts() {
         $(container).append(scriptHtml);
     }
 
-    getScriptsByType(SCRIPT_TYPES.GLOBAL).forEach((script, index) => renderScript('#saved_regex_scripts', script, SCRIPT_TYPES.GLOBAL, index));
-    getScriptsByType(SCRIPT_TYPES.SCOPED).forEach((script, index) => renderScript('#saved_scoped_scripts', script, SCRIPT_TYPES.SCOPED, index));
-    getScriptsByType(SCRIPT_TYPES.PRESET).forEach((script, index) => renderScript('#saved_preset_scripts', script, SCRIPT_TYPES.PRESET, index));
+    /**
+     * Renders a folder drawer to the UI.
+     * @param {string|JQuery<HTMLElement>} container Container to render the folder to
+     * @param {RegexFolder} folder Folder data
+     * @param {SCRIPT_TYPES} scriptType Script type
+     * @param {number} scriptCount Number of scripts in the folder
+     * @returns {JQuery<HTMLElement>} Folder content container
+     */
+    function renderFolder(container, folder, scriptType, scriptCount) {
+        const folderHtml = $(`
+            <div class="regex-folder">
+                <div class="regex-folder-header flex-container flexnowrap">
+                    <div class="regex-folder-toggle menu_button" title="Collapse folder" data-i18n="[title]Collapse folder">
+                        <i class="fa-solid"></i>
+                    </div>
+                    <div class="regex-folder-name flex1 overflow-hidden"></div>
+                    <small class="regex-folder-count"></small>
+                    <div class="regex-folder-move-selected menu_button" title="Move selected scripts here" data-i18n="[title]Move selected scripts here">
+                        <i class="fa-solid fa-folder-plus"></i>
+                    </div>
+                    <div class="regex-folder-rename menu_button" title="Rename folder" data-i18n="[title]Rename folder">
+                        <i class="fa-solid fa-pencil"></i>
+                    </div>
+                    <div class="regex-folder-delete menu_button" title="Delete folder" data-i18n="[title]Delete folder">
+                        <i class="fa-solid fa-trash"></i>
+                    </div>
+                </div>
+                <div class="regex-folder-content flex-container regex-script-container flexFlowColumn" no-scripts-text="Drop scripts here"></div>
+            </div>
+        `);
+        const folderContent = folderHtml.find('.regex-folder-content');
+        const updateCollapsedState = () => {
+            folderHtml.toggleClass('collapsed', folder.collapsed);
+            folderHtml.find('.regex-folder-toggle i')
+                .toggleClass('fa-chevron-down', !folder.collapsed)
+                .toggleClass('fa-chevron-right', folder.collapsed);
+        };
+
+        folderHtml.attr('data-folder-id', folder.id);
+        folderHtml.find('.regex-folder-name').text(folder.name).attr('title', folder.name);
+        folderHtml.find('.regex-folder-count').text(scriptCount === 1 ? t`1 script` : t`${scriptCount} scripts`);
+        folderContent.addClass(getRegexSortableClass(scriptType));
+        updateCollapsedState();
+
+        folderHtml.find('.regex-folder-toggle, .regex-folder-name').on('click', function () {
+            folder.collapsed = !folder.collapsed;
+            updateCollapsedState();
+            saveSettingsDebounced();
+        });
+
+        folderHtml.find('.regex-folder-move-selected').on('click', async function () {
+            const selectedIds = Array.from(document.querySelectorAll('#regex_container .regex-script-label:has(.regex_bulk_checkbox:checked)'))
+                .map(e => e.getAttribute('id'))
+                .filter(id => id);
+            const scripts = getScriptsByType(scriptType);
+            const selectedScripts = scripts.filter(script => selectedIds.includes(script.id));
+            if (selectedScripts.length === 0) {
+                toastr.warning(t`No matching scripts selected.`);
+                return;
+            }
+            selectedScripts.forEach(script => { script.folderId = folder.id; });
+            await saveScriptsByType(scripts, scriptType);
+            saveSettingsDebounced();
+            await loadRegexScripts();
+        });
+
+        folderHtml.find('.regex-folder-rename').on('click', async function () {
+            const name = await Popup.show.input(t`Rename regex folder`, t`Enter a new folder name:`, folder.name);
+            if (!name || !name.trim() || name.trim() === folder.name) {
+                return;
+            }
+            folder.name = name.trim();
+            saveSettingsDebounced();
+            await loadRegexScripts();
+        });
+
+        folderHtml.find('.regex-folder-delete').on('click', async function () {
+            const confirm = await callGenericPopup(t`Delete this folder? Scripts inside it will be kept.`, POPUP_TYPE.CONFIRM);
+            if (!confirm) {
+                return;
+            }
+            const folders = getRegexFolders(scriptType);
+            const folderIndex = folders.findIndex(item => item.id === folder.id);
+            if (folderIndex !== -1) {
+                folders.splice(folderIndex, 1);
+            }
+            const scripts = getScriptsByType(scriptType);
+            scripts.forEach(script => {
+                if (script.folderId === folder.id) {
+                    delete script.folderId;
+                }
+            });
+            await saveScriptsByType(scripts, scriptType);
+            saveSettingsDebounced();
+            await loadRegexScripts();
+        });
+
+        $(container).append(folderHtml);
+        return folderContent;
+    }
+
+    /**
+     * Renders one script type into its root container and folders.
+     * @param {string} container Container selector
+     * @param {SCRIPT_TYPES} scriptType Script type
+     * @returns {void}
+     */
+    function renderScriptsForType(container, scriptType) {
+        const scripts = getScriptsByType(scriptType);
+        const folders = getRegexFolders(scriptType);
+        const folderIds = new Set(folders.map(folder => folder.id));
+        const folderContainers = new Map();
+
+        for (const folder of folders) {
+            const scriptCount = scripts.filter(script => script.folderId === folder.id).length;
+            const folderContent = renderFolder(container, folder, scriptType, scriptCount);
+            folderContainers.set(folder.id, folderContent);
+        }
+
+        scripts.forEach((script, index) => {
+            const folderContent = script.folderId && folderIds.has(script.folderId)
+                ? folderContainers.get(script.folderId)
+                : null;
+            renderScript(folderContent || container, script, scriptType, index);
+        });
+    }
+
+    renderScriptsForType('#saved_regex_scripts', SCRIPT_TYPES.GLOBAL);
+    renderScriptsForType('#saved_scoped_scripts', SCRIPT_TYPES.SCOPED);
+    renderScriptsForType('#saved_preset_scripts', SCRIPT_TYPES.PRESET);
 
     $('#regex_scoped_toggle').prop('checked', isScopedScriptsAllowed(characters?.[this_chid]));
     $('#regex_preset_toggle').prop('checked', isPresetScriptsAllowed(getCurrentPresetAPI(), getCurrentPresetName()));
 
+    setupRegexSortables();
     setMoveButtonsVisibility();
+}
+
+/**
+ * Saves the current UI order and folder membership for a script type.
+ * @param {string} containerSelector Root list selector
+ * @param {SCRIPT_TYPES} scriptType Script type
+ * @returns {Promise<void>}
+ */
+async function saveRegexScriptOrder(containerSelector, scriptType) {
+    const oldScripts = getScriptsByType(scriptType);
+    const scriptById = new Map(oldScripts.map(script => [script.id, script]));
+    const handledIds = new Set();
+    const newScripts = [];
+
+    /**
+     * Adds a script to the reordered list.
+     * @param {string|undefined} id Script ID
+     * @param {string|null} folderId Folder ID, or null for root
+     * @returns {void}
+     */
+    function addScript(id, folderId) {
+        if (!id || handledIds.has(id)) {
+            return;
+        }
+
+        const script = scriptById.get(id);
+        if (!script) {
+            return;
+        }
+
+        if (folderId) {
+            script.folderId = folderId;
+        } else {
+            delete script.folderId;
+        }
+
+        handledIds.add(id);
+        newScripts.push(script);
+    }
+
+    $(containerSelector).children().each(function () {
+        const element = $(this);
+        if (element.hasClass('regex-script-label')) {
+            addScript(element.attr('id'), null);
+            return;
+        }
+
+        if (element.hasClass('regex-folder')) {
+            const folderId = element.attr('data-folder-id');
+            if (!folderId) {
+                return;
+            }
+            element.find('> .regex-folder-content > .regex-script-label').each(function () {
+                addScript($(this).attr('id'), folderId);
+            });
+        }
+    });
+
+    for (const script of oldScripts) {
+        if (handledIds.has(script.id)) {
+            continue;
+        }
+
+        if (script.folderId && !getRegexFolder(scriptType, script.folderId)) {
+            delete script.folderId;
+        }
+
+        newScripts.push(script);
+    }
+
+    await saveScriptsByType(newScripts, scriptType);
+    saveSettingsDebounced();
+
+    console.debug(`Regex scripts in ${containerSelector} reordered`);
+    await reloadCurrentChat();
+    await loadRegexScripts();
+}
+
+/**
+ * Sets up sortable lists for regex scripts and folder contents.
+ */
+function setupRegexSortables() {
+    const sortableDatas = [
+        { selector: '#saved_regex_scripts', scriptType: SCRIPT_TYPES.GLOBAL },
+        { selector: '#saved_scoped_scripts', scriptType: SCRIPT_TYPES.SCOPED },
+        { selector: '#saved_preset_scripts', scriptType: SCRIPT_TYPES.PRESET },
+    ];
+
+    for (const { selector, scriptType } of sortableDatas) {
+        const sortableClass = getRegexSortableClass(scriptType);
+        const sortableSelector = `${selector}, ${selector} .regex-folder-content`;
+
+        $(sortableSelector).each(function () {
+            if ($(this).data('ui-sortable')) {
+                // @ts-ignore
+                $(this).sortable('destroy');
+            }
+        });
+
+        $(selector).addClass(sortableClass);
+
+        // @ts-ignore
+        $(sortableSelector).sortable({
+            connectWith: `.${sortableClass}`,
+            delay: getSortableDelay(),
+            handle: '.drag-handle',
+            items: '> .regex-script-label',
+            stop: async function () {
+                await saveRegexScriptOrder(selector, scriptType);
+            },
+        });
+    }
+}
+
+/**
+ * Creates a regex folder for a script type.
+ * @param {SCRIPT_TYPES} scriptType Script type
+ * @returns {Promise<void>}
+ */
+async function onCreateRegexFolderClick(scriptType) {
+    if (scriptType === SCRIPT_TYPES.SCOPED) {
+        if (this_chid === undefined) {
+            toastr.error(t`No character selected.`);
+            return;
+        }
+
+        if (selected_group) {
+            toastr.error(t`Cannot edit scoped scripts in group chats.`);
+            return;
+        }
+    }
+
+    const name = await Popup.show.input(t`Enter folder name:`);
+    if (!name || !name.trim()) {
+        return;
+    }
+
+    getRegexFolders(scriptType).push({
+        id: uuidv4(),
+        name: name.trim(),
+        collapsed: false,
+    });
+
+    saveSettingsDebounced();
+    await loadRegexScripts();
 }
 
 /**
@@ -1734,6 +2072,8 @@ export async function init() {
         extension_settings.regex_presets = [];
     }
 
+    ensureRegexFolderState();
+
     // Manually disable the extension since static imports auto-import the JS file
     if (extension_settings.disabledExtensions.includes('regex')) {
         return;
@@ -1762,6 +2102,15 @@ export async function init() {
     });
     $('#open_preset_editor').on('click', function () {
         onRegexEditorOpenClick(false, SCRIPT_TYPES.PRESET);
+    });
+    $('#create_global_regex_folder').on('click', function () {
+        onCreateRegexFolderClick(SCRIPT_TYPES.GLOBAL);
+    });
+    $('#create_preset_regex_folder').on('click', function () {
+        onCreateRegexFolderClick(SCRIPT_TYPES.PRESET);
+    });
+    $('#create_scoped_regex_folder').on('click', function () {
+        onCreateRegexFolderClick(SCRIPT_TYPES.SCOPED);
     });
     $('#import_regex_file').on('change', async function () {
         let target = SCRIPT_TYPES.GLOBAL;
@@ -1925,49 +2274,6 @@ export async function init() {
         await loadRegexScripts();
     });
 
-    let sortableDatas = [
-        {
-            selector: '#saved_regex_scripts',
-            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.GLOBAL),
-            getter: () => getScriptsByType(SCRIPT_TYPES.GLOBAL),
-        },
-        {
-            selector: '#saved_scoped_scripts',
-            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.SCOPED),
-            getter: () => getScriptsByType(SCRIPT_TYPES.SCOPED),
-        },
-        {
-            selector: '#saved_preset_scripts',
-            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.PRESET),
-            getter: () => getScriptsByType(SCRIPT_TYPES.PRESET),
-        },
-    ];
-    for (const { selector, setter, getter } of sortableDatas) {
-        // @ts-ignore
-        $(selector).sortable({
-            delay: getSortableDelay(),
-            handle: '.drag-handle',
-            stop: async function () {
-                const oldScripts = getter();
-                const newScripts = [];
-                $(selector).children().each(function () {
-                    const id = $(this).attr('id');
-                    const existingScript = oldScripts.find((e) => e.id === id);
-                    if (existingScript) {
-                        newScripts.push(existingScript);
-                    }
-                });
-
-                await setter(newScripts);
-                saveSettingsDebounced();
-
-                console.debug(`Regex scripts in ${selector} reordered`);
-                await reloadCurrentChat();
-                await loadRegexScripts();
-            },
-        });
-    }
-
     $('#regex_scoped_toggle').on('input', function () {
         if (this_chid === undefined) {
             toastr.error(t`No character selected.`);
@@ -2007,8 +2313,6 @@ export async function init() {
     });
 
     await loadRegexScripts();
-    // @ts-ignore
-    $('#saved_regex_scripts').sortable('enable');
 
     /**
      * @typedef {object} ScriptDecorators
