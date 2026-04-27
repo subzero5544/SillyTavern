@@ -708,18 +708,11 @@ async function firstLoadInit() {
     const initLoaderOverlay = loader.createOverlay();
     initLoaderOverlay.classList.add('splash-screen');
 
-    const splashLogo = document.createElement('img');
-    splashLogo.src = '/img/loading-logo.png';
-    splashLogo.alt = 'Wulf\'s Hollow';
-    splashLogo.className = 'splash-logo';
-    splashLogo.ariaLabel = t`Wulf's Hollow Logo`;
-
     const splashMessage = document.createElement('h2');
     splashMessage.className = 'splash-message';
     splashMessage.textContent = t`Initializing…`;
     splashMessage.dataset.i18n = 'Initializing…';
 
-    initLoaderOverlay.prepend(splashLogo);
     initLoaderOverlay.appendChild(splashMessage);
 
     const initLoaderHandle = loader.show({

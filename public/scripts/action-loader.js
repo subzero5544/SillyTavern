@@ -490,7 +490,21 @@ export function createDefaultLoaderOverlay() {
 
     const spinnerElement = document.createElement('div');
     spinnerElement.id = 'load-spinner';
-    spinnerElement.className = 'fa-solid fa-gear fa-spin fa-3x';
+    spinnerElement.className = 'wh-loader-coin';
+    spinnerElement.setAttribute('role', 'img');
+    spinnerElement.setAttribute('aria-label', 'Wulf\'s Hollow loading');
+
+    const frontFace = document.createElement('img');
+    frontFace.className = 'wh-loader-coin-face wh-loader-coin-front';
+    frontFace.src = '/img/loading-logo.png';
+    frontFace.alt = '';
+
+    const backFace = document.createElement('img');
+    backFace.className = 'wh-loader-coin-face wh-loader-coin-back';
+    backFace.src = '/img/loading-logo.png';
+    backFace.alt = '';
+
+    spinnerElement.append(frontFace, backFace);
 
     loaderElement.appendChild(spinnerElement);
 
