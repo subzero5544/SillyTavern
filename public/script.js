@@ -709,7 +709,7 @@ async function firstLoadInit() {
     initLoaderOverlay.classList.add('splash-screen');
 
     const splashLogo = document.createElement('img');
-    splashLogo.src = '/img/logo.png';
+    splashLogo.src = '/img/loading-logo.png';
     splashLogo.alt = 'Wulf\'s Hollow';
     splashLogo.className = 'splash-logo';
     splashLogo.ariaLabel = t`Wulf's Hollow Logo`;
