@@ -680,6 +680,44 @@ describe('postProcessPrompt', () => {
         const result = mod.postProcessPrompt(messages, 'claude', names);
         expect(result).toHaveLength(1);
     });
+
+    test('WULFS_STRICT mirrors Marinara strict role formatting', () => {
+        const messages = [
+            { role: 'system', content: 'System A' },
+            { role: 'system', content: 'System B' },
+            { role: 'user', content: 'User A' },
+            { role: 'system', content: 'Late system A' },
+            { role: 'system', content: 'Late system B' },
+            { role: 'assistant', content: 'Assistant A', tool_calls: [{ id: 'tool-call' }] },
+            { role: 'assistant', content: 'Assistant B' },
+            { role: 'tool', content: 'Tool result', tool_call_id: 'tool-call' },
+            { role: 'user', content: 'User B' },
+        ];
+
+        const result = mod.postProcessPrompt(messages, mod.PROMPT_PROCESSING_TYPE.WULFS_STRICT, names);
+
+        expect(result.map(message => message.role)).toEqual(['system', 'user', 'assistant', 'user']);
+        expect(result[0].content).toBe('System A\n\nSystem B');
+        expect(result[1].content).toBe('User A\n\nLate system A\n\nLate system B');
+        expect(result[2].content).toBe('Assistant A\n\nAssistant B');
+        expect(result[2].tool_calls).toBeUndefined();
+        expect(result[3].content).toBe('Tool result\n\nUser B');
+        expect(result[3].tool_call_id).toBeUndefined();
+    });
+
+    test('WULFS_STRICT forces an assistant-first prompt to start as user', () => {
+        const messages = [
+            { role: 'assistant', content: 'Assistant starts' },
+            { role: 'assistant', content: 'Assistant follows' },
+        ];
+
+        const result = mod.postProcessPrompt(messages, mod.PROMPT_PROCESSING_TYPE.WULFS_STRICT, names);
+
+        expect(result).toEqual([
+            { role: 'user', content: 'Assistant starts' },
+            { role: 'assistant', content: 'Assistant follows' },
+        ]);
+    });
 });
 
 

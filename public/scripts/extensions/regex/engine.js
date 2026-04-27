@@ -301,6 +301,11 @@ export const substitute_find_regex = {
     ESCAPED: 2,
 };
 
+export const REGEX_REPLACE_MODE = {
+    TEXT: 'text',
+    JAVASCRIPT: 'javascript',
+};
+
 function sanitizeRegexMacro(x) {
     return (x && typeof x === 'string') ?
         x.replaceAll(/[\n\r\t\v\f\0.^$*+?{}[\]\\/|()]/gs, function (s) {
@@ -380,6 +385,90 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
     return finalString;
 }
 
+function getRegexReplacementMode(regexScript) {
+    return Object.values(REGEX_REPLACE_MODE).includes(regexScript.replaceMode)
+        ? regexScript.replaceMode
+        : REGEX_REPLACE_MODE.TEXT;
+}
+
+function normalizeRegexJavaScriptReplacement(value) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+
+    if (typeof value === 'object') {
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+
+    return String(value);
+}
+
+function getRegexReplacementContext(match, args, regexScript, params) {
+    const lastArg = args[args.length - 1];
+    const hasGroups = lastArg && typeof lastArg === 'object';
+    const groups = hasGroups ? lastArg : {};
+    const offset = hasGroups ? args[args.length - 3] : args[args.length - 2];
+    const input = hasGroups ? args[args.length - 2] : lastArg;
+    const captures = [match, ...args.slice(0, hasGroups ? -3 : -2)];
+
+    return {
+        match,
+        captures,
+        groups,
+        offset,
+        input,
+        script: {
+            id: regexScript.id,
+            scriptName: regexScript.scriptName,
+        },
+        params,
+    };
+}
+
+function createRegexJavaScriptReplacementFunction(regexScript) {
+    try {
+        return new Function(
+            'match',
+            'captures',
+            'groups',
+            'offset',
+            'input',
+            'script',
+            'params',
+            '"use strict";\n' + (regexScript.replaceString ?? ''),
+        );
+    } catch (error) {
+        console.warn(`Regex JavaScript replacement failed to compile for script "${regexScript.scriptName || regexScript.id}":`, error);
+        return null;
+    }
+}
+
+function runRegexJavaScriptReplacement(regexScript, fn, context) {
+    if (!fn) {
+        return context.match;
+    }
+
+    try {
+        const result = fn(
+            context.match,
+            context.captures,
+            context.groups,
+            context.offset,
+            context.input,
+            context.script,
+            context.params,
+        );
+        return normalizeRegexJavaScriptReplacement(result);
+    } catch (error) {
+        console.warn(`Regex JavaScript replacement failed for script "${regexScript.scriptName || regexScript.id}":`, error);
+        return context.match;
+    }
+}
+
 /**
  * Runs the provided regex script on the given string
  * @param {RegexScript} regexScript The regex script to run
@@ -415,27 +504,43 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
         return newString;
     }
 
+    const replaceMode = getRegexReplacementMode(regexScript);
+    const replacementFunction = replaceMode === REGEX_REPLACE_MODE.JAVASCRIPT
+        ? createRegexJavaScriptReplacementFunction(regexScript)
+        : null;
+
     // Run replacement. Currently does not support the Overlay strategy
     newString = rawString.replace(findRegex, function (match) {
-        const args = [...arguments];
-        const replaceString = regexScript.replaceString.replace(/{{match}}/gi, '$0');
+        const args = [...arguments].slice(1);
+
+        if (replaceMode === REGEX_REPLACE_MODE.JAVASCRIPT) {
+            return runRegexJavaScriptReplacement(
+                regexScript,
+                replacementFunction,
+                getRegexReplacementContext(match, args, regexScript, { characterOverride }),
+            );
+        }
+
+        const replaceString = String(regexScript.replaceString ?? '').replace(/{{match}}/gi, '$0');
+        const trimStrings = Array.isArray(regexScript.trimStrings) ? regexScript.trimStrings : [];
         const replaceWithGroups = replaceString.replaceAll(/\$(\d+)|\$<([^>]+)>/g, (_, num, groupName) => {
+            let matchedValue;
             if (num) {
                 // Handle numbered capture groups ($1, $2, etc.)
-                match = args[Number(num)];
+                matchedValue = Number(num) === 0 ? match : args[Number(num) - 1];
             } else if (groupName) {
                 // Handle named capture groups ($<name>)
                 const groups = args[args.length - 1];
-                match = groups && typeof groups === 'object' && groups[groupName];
+                matchedValue = groups && typeof groups === 'object' && groups[groupName];
             }
 
             // No match found - return the empty string
-            if (!match) {
+            if (!matchedValue) {
                 return '';
             }
 
             // Remove trim strings from the match
-            const filteredMatch = filterString(match, regexScript.trimStrings, { characterOverride });
+            const filteredMatch = filterString(matchedValue, trimStrings, { characterOverride });
 
             return filteredMatch;
         });

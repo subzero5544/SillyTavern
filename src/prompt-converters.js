@@ -22,6 +22,7 @@ export const PROMPT_PROCESSING_TYPE = {
     SEMI_TOOLS: 'semi_tools',
     STRICT: 'strict',
     STRICT_TOOLS: 'strict_tools',
+    WULFS_STRICT: 'wulfs_strict',
     SINGLE: 'single',
 };
 
@@ -97,6 +98,8 @@ export function postProcessPrompt(messages, type, names) {
             return mergeMessages(messages, names, { strict: true, placeholders: true, single: false, tools: false });
         case PROMPT_PROCESSING_TYPE.STRICT_TOOLS:
             return mergeMessages(messages, names, { strict: true, placeholders: true, single: false, tools: true });
+        case PROMPT_PROCESSING_TYPE.WULFS_STRICT:
+            return enforceWulfsStrictRoles(messages, names);
         case PROMPT_PROCESSING_TYPE.SINGLE:
             return mergeMessages(messages, names, { strict: true, placeholders: false, single: true, tools: false });
         default:
@@ -807,6 +810,131 @@ export function convertXAIMessages(messages, names) {
     });
 
     return messages;
+}
+
+/**
+ * Enforces Marinara-style strict role formatting: leading system messages are
+ * merged, then every following message is forced to alternate user/assistant.
+ * @param {any[]} messages Messages to process
+ * @param {PromptNames} names Prompt names
+ * @returns {any[]} Processed messages
+ */
+export function enforceWulfsStrictRoles(messages, names) {
+    const contentTokens = new Map();
+
+    messages.forEach((message) => {
+        if (!message.content) {
+            message.content = '';
+        }
+        if (Array.isArray(message.content)) {
+            const text = message.content.map((content) => {
+                if (content.type === 'text') {
+                    return content.text;
+                }
+                if (['image_url', 'video_url', 'audio_url'].includes(content.type)) {
+                    const token = crypto.randomBytes(32).toString('base64');
+                    contentTokens.set(token, content);
+                    return token;
+                }
+                return '';
+            }).join('\n\n');
+            message.content = text;
+        }
+        if (message.role === 'system' && message.name === 'example_assistant') {
+            if (names.charName && !message.content.startsWith(`${names.charName}: `) && !names.startsWithGroupName(message.content)) {
+                message.content = `${names.charName}: ${message.content}`;
+            }
+        }
+        if (message.role === 'system' && message.name === 'example_user') {
+            if (names.userName && !message.content.startsWith(`${names.userName}: `)) {
+                message.content = `${names.userName}: ${message.content}`;
+            }
+        }
+        if (message.name && message.role !== 'system') {
+            if (!message.content.startsWith(`${message.name}: `)) {
+                message.content = `${message.name}: ${message.content}`;
+            }
+        }
+        if (message.role === 'tool') {
+            message.role = 'user';
+        }
+        delete message.name;
+        delete message.tool_calls;
+        delete message.tool_call_id;
+    });
+
+    const result = [];
+    let index = 0;
+    const systemParts = [];
+
+    while (index < messages.length && messages[index].role === 'system') {
+        systemParts.push(messages[index].content);
+        index++;
+    }
+
+    if (systemParts.length > 0) {
+        result.push({ ...messages[index - 1], role: 'system', content: systemParts.join('\n\n') });
+    }
+
+    let expectedRole = 'user';
+    for (; index < messages.length; index++) {
+        const message = messages[index];
+        const effectiveRole = message.role === 'system' ? 'user' : message.role;
+
+        if (effectiveRole === expectedRole) {
+            result.push({ ...message, role: effectiveRole });
+            expectedRole = effectiveRole === 'user' ? 'assistant' : 'user';
+        } else {
+            const previous = result[result.length - 1];
+            if (previous && previous.role === effectiveRole) {
+                previous.content += '\n\n' + message.content;
+            } else {
+                result.push({ ...message, role: expectedRole });
+                expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
+            }
+        }
+    }
+
+    if (result.length === 0) {
+        result.push({ role: 'user', content: PROMPT_PLACEHOLDER });
+    }
+
+    restoreContentTokens(result, contentTokens);
+    return result;
+}
+
+/**
+ * Restores flattened multimodal content tokens to provider content objects.
+ * @param {any[]} messages Messages to restore
+ * @param {Map<string, object>} contentTokens Stored content tokens
+ */
+function restoreContentTokens(messages, contentTokens) {
+    if (contentTokens.size === 0) {
+        return;
+    }
+
+    messages.forEach((message) => {
+        const hasValidToken = Array.from(contentTokens.keys()).some(token => message.content.includes(token));
+
+        if (!hasValidToken) {
+            return;
+        }
+
+        const splitContent = message.content.split('\n\n');
+        const mergedContent = [];
+
+        splitContent.forEach((content) => {
+            if (contentTokens.has(content)) {
+                mergedContent.push(contentTokens.get(content));
+            } else if (mergedContent.length > 0 && mergedContent[mergedContent.length - 1].type === 'text') {
+                mergedContent[mergedContent.length - 1].text += `\n\n${content}`;
+            } else {
+                mergedContent.push({ type: 'text', text: content });
+            }
+        });
+
+        message.content = mergedContent;
+    });
 }
 
 /**

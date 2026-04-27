@@ -460,6 +460,9 @@ let scrollLock = false;
 export let abortStatusCheck = new AbortController();
 export let charDragDropHandler = null;
 export let chatDragDropHandler = null;
+let quickSelectionEditorState = null;
+let quickSelectionEditorUpdateTimeout = null;
+let quickSelectionEditorHideTimeout = null;
 
 /** @type {debounce_timeout} The debounce timeout used for chat/settings save. debounce_timeout.long: 1.000 ms */
 export const DEFAULT_SAVE_EDIT_TIMEOUT = debounce_timeout.relaxed;
@@ -8152,6 +8155,229 @@ function messageEditAuto(div) {
     saveChatDebounced();
 }
 
+function getSelectionNodeElement(node) {
+    if (!node) {
+        return null;
+    }
+
+    return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+}
+
+function getSelectionMessageTextElement(selection) {
+    const anchorElement = getSelectionNodeElement(selection.anchorNode);
+    const focusElement = getSelectionNodeElement(selection.focusNode);
+    const anchorMessageText = anchorElement?.closest?.('.mes_text');
+    const focusMessageText = focusElement?.closest?.('.mes_text');
+
+    if (!anchorMessageText || anchorMessageText !== focusMessageText) {
+        return null;
+    }
+
+    return anchorMessageText;
+}
+
+function getSelectionPlainStart(selection, container) {
+    const range = selection.getRangeAt(0);
+    const preSelectionRange = range.cloneRange();
+    preSelectionRange.selectNodeContents(container);
+    preSelectionRange.setEnd(range.startContainer, range.startOffset);
+    return preSelectionRange.toString().length;
+}
+
+function getQuickSelectionEditInfo() {
+    if ($('.edit_textarea').length) {
+        return null;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        return null;
+    }
+
+    const selectedText = selection.toString();
+    if (!selectedText.trim()) {
+        return null;
+    }
+
+    const messageTextElement = getSelectionMessageTextElement(selection);
+    const messageElement = messageTextElement?.closest?.('.mes');
+    const messageId = Number(messageElement?.getAttribute('mesid'));
+    if (!messageElement || isNaN(messageId) || !chat[messageId]) {
+        return null;
+    }
+
+    const range = selection.getRangeAt(0).cloneRange();
+    let rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+        rect = messageTextElement.getBoundingClientRect();
+    }
+
+    return {
+        messageId,
+        selectedText,
+        plainStart: getSelectionPlainStart(selection, messageTextElement),
+        rect,
+    };
+}
+
+function ensureQuickSelectionEditor() {
+    let editor = document.getElementById('quick_selection_editor');
+    if (editor) {
+        return editor;
+    }
+
+    editor = document.createElement('div');
+    editor.id = 'quick_selection_editor';
+    editor.className = 'quick_selection_editor displayNone';
+    editor.innerHTML = `
+        <button type="button" class="quick_selection_edit menu_button fa-solid fa-pen" title="Edit selected text" aria-label="Edit selected text"></button>
+        <button type="button" class="quick_selection_delete menu_button fa-solid fa-trash-can" title="Delete selected text" aria-label="Delete selected text"></button>
+    `;
+
+    editor.addEventListener('mousedown', event => event.preventDefault());
+    editor.querySelector('.quick_selection_edit').addEventListener('click', () => void editQuickSelectedText());
+    editor.querySelector('.quick_selection_delete').addEventListener('click', () => void applyQuickSelectionReplacement(''));
+    document.body.append(editor);
+
+    return editor;
+}
+
+function hideQuickSelectionEditor({ clearState = true } = {}) {
+    clearTimeout(quickSelectionEditorHideTimeout);
+    document.getElementById('quick_selection_editor')?.classList.add('displayNone');
+    if (clearState) {
+        quickSelectionEditorState = null;
+    }
+}
+
+function hideQuickSelectionEditorDebounced(options = {}) {
+    clearTimeout(quickSelectionEditorHideTimeout);
+    quickSelectionEditorHideTimeout = setTimeout(() => hideQuickSelectionEditor(options), 160);
+}
+
+function showQuickSelectionEditor(info) {
+    clearTimeout(quickSelectionEditorHideTimeout);
+    const editor = ensureQuickSelectionEditor();
+    editor.classList.remove('displayNone');
+
+    const editorRect = editor.getBoundingClientRect();
+    const topAbove = info.rect.top - editorRect.height - 8;
+    const top = topAbove >= 8 ? topAbove : info.rect.bottom + 8;
+    const left = clamp(info.rect.left + (info.rect.width / 2) - (editorRect.width / 2), 8, window.innerWidth - editorRect.width - 8);
+
+    editor.style.top = `${Math.max(8, top)}px`;
+    editor.style.left = `${left}px`;
+}
+
+function updateQuickSelectionEditorFromSelection() {
+    const info = getQuickSelectionEditInfo();
+    if (!info) {
+        hideQuickSelectionEditorDebounced();
+        return;
+    }
+
+    quickSelectionEditorState = info;
+    showQuickSelectionEditor(info);
+}
+
+function scheduleQuickSelectionEditorUpdate() {
+    clearTimeout(quickSelectionEditorUpdateTimeout);
+    quickSelectionEditorUpdateTimeout = setTimeout(updateQuickSelectionEditorFromSelection, 60);
+}
+
+function findClosestSelectionMatch(source, selectedText, approximateIndex) {
+    const candidates = [
+        selectedText,
+        selectedText.replace(/\u00a0/g, ' '),
+        selectedText.trim(),
+    ].filter(onlyUnique).filter(Boolean);
+
+    let bestMatch = null;
+    for (const candidate of candidates) {
+        let index = source.indexOf(candidate);
+        while (index !== -1) {
+            const distance = Math.abs(index - approximateIndex);
+            if (!bestMatch || distance < bestMatch.distance) {
+                bestMatch = { index, length: candidate.length, distance };
+            }
+            index = source.indexOf(candidate, index + candidate.length);
+        }
+    }
+
+    if (bestMatch) {
+        return bestMatch;
+    }
+
+    const collapsedSelection = selectedText.trim().split(/\s+/).filter(Boolean);
+    if (collapsedSelection.length === 0) {
+        return null;
+    }
+
+    try {
+        const fuzzyPattern = collapsedSelection.map(escapeRegex).join('\\s+');
+        const fuzzyRegex = new RegExp(fuzzyPattern, 'g');
+        let match;
+        while ((match = fuzzyRegex.exec(source)) !== null) {
+            const distance = Math.abs(match.index - approximateIndex);
+            if (!bestMatch || distance < bestMatch.distance) {
+                bestMatch = { index: match.index, length: match[0].length, distance };
+            }
+        }
+    } catch (error) {
+        console.warn('Could not build fuzzy selection edit matcher:', error);
+    }
+
+    return bestMatch;
+}
+
+async function applyQuickSelectionReplacement(replacementText) {
+    const info = quickSelectionEditorState ?? getQuickSelectionEditInfo();
+    if (!info) {
+        return;
+    }
+
+    const message = chat[info.messageId];
+    const source = String(message?.mes ?? '');
+    const match = findClosestSelectionMatch(source, info.selectedText, info.plainStart);
+    if (!message || !match) {
+        toastr.warning(t`Selected text could not be found in the message source. Use the full message editor for this selection.`);
+        hideQuickSelectionEditor();
+        return;
+    }
+
+    message.mes = source.slice(0, match.index) + replacementText + source.slice(match.index + match.length);
+    chat_metadata.tainted = true;
+    syncMesToSwipe(info.messageId);
+    updateMessageBlock(info.messageId, message);
+    await eventSource.emit(event_types.MESSAGE_EDITED, info.messageId);
+    await eventSource.emit(event_types.MESSAGE_UPDATED, info.messageId);
+    await saveChatConditional();
+    window.getSelection()?.removeAllRanges();
+    hideQuickSelectionEditor();
+}
+
+async function editQuickSelectedText() {
+    const info = quickSelectionEditorState ?? getQuickSelectionEditInfo();
+    if (!info) {
+        return;
+    }
+
+    hideQuickSelectionEditor({ clearState: false });
+    const replacement = await callGenericPopup(t`Replace selected text with:`, POPUP_TYPE.INPUT, info.selectedText, {
+        rows: 2,
+        wide: false,
+        large: false,
+    });
+
+    if (replacement === POPUP_RESULT.CANCELLED || replacement === false || replacement === null) {
+        quickSelectionEditorState = null;
+        return;
+    }
+
+    quickSelectionEditorState = info;
+    await applyQuickSelectionReplacement(String(replacement));
+}
+
 /**
  * Create the message edit UI.
  * @param {number} editMessageId The ID of the message to edit
@@ -11738,6 +11964,37 @@ jQuery(async function () {
             } catch (err) {
                 console.error('Failed to copy: ', err);
             }
+        }
+    });
+
+    document.addEventListener('selectionchange', scheduleQuickSelectionEditorUpdate);
+    window.addEventListener('resize', () => hideQuickSelectionEditor());
+    chatElement.on('scroll', () => hideQuickSelectionEditor());
+
+    $(document).on('keydown', function (event) {
+        const isQuickDelete = event.key === 'Backspace' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+        const isQuickEdit = event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+        if (!isQuickDelete && !isQuickEdit) {
+            return;
+        }
+
+        const activeElement = document.activeElement;
+        const isEditableTarget = activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
+        if (isEditableTarget) {
+            return;
+        }
+
+        const info = getQuickSelectionEditInfo();
+        if (!info) {
+            return;
+        }
+
+        event.preventDefault();
+        quickSelectionEditorState = info;
+        if (isQuickEdit) {
+            void editQuickSelectedText();
+        } else {
+            void applyQuickSelectionReplacement('');
         }
     });
 

@@ -225,6 +225,7 @@ export const custom_prompt_post_processing_types = {
     SEMI_TOOLS: 'semi_tools',
     STRICT: 'strict',
     STRICT_TOOLS: 'strict_tools',
+    WULFS_STRICT: 'wulfs_strict',
     SINGLE: 'single',
 };
 

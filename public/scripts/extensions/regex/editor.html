@@ -57,11 +57,23 @@
                 </div>
             </div>
             <div class="flex1">
+                <label for="regex_replace_mode" class="title_restorable">
+                    <small>Replace Mode</small>
+                </label>
+                <div>
+                    <select id="regex_replace_mode" class="regex_replace_mode text_pole textarea_compact" name="replace_mode">
+                        <option value="text">Text replacement</option>
+                        <option value="javascript">JavaScript function body</option>
+                    </select>
+                    <small class="regex_replace_mode_hint">Text mode supports {{match}}, $1, and $&lt;name&gt;. JavaScript mode runs trusted code for each match; use return to produce replacement text.</small>
+                </div>
+            </div>
+            <div class="flex1">
                 <label for="regex_replace_string" class="title_restorable">
                     <small data-i18n="Replace With">Replace With</small>
                 </label>
                 <div>
-                    <textarea class="regex_replace_string text_pole wide100p textarea_compact" data-i18n="[placeholder]ext_regex_replace_string_placeholder" placeholder="Use {{match}} to include the matched text from the Find Regex, $1, $2, etc. for numbered capture groups, or $&lt;name&gt; for named capture groups." rows="3"></textarea>
+                    <textarea class="regex_replace_string text_pole wide100p textarea_compact" data-i18n="[placeholder]ext_regex_replace_string_placeholder" placeholder="Use {{match}} to include the matched text from the Find Regex, $1, $2, etc. for numbered capture groups, or $&lt;name&gt; for named capture groups. In JavaScript mode, write a function body such as: return match.toUpperCase();" rows="3"></textarea>
                 </div>
             </div>
             <div class="flex1">

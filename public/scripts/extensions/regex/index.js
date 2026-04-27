@@ -8,7 +8,7 @@ import { commonEnumProviders, enumIcons } from '../../slash-commands/SlashComman
 import { SlashCommandEnumValue, enumTypes } from '../../slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { download, equalsIgnoreCaseAndAccents, escapeHtml, getFileText, getSortableDelay, isFalseBoolean, isTrueBoolean, regexFromString, setInfoBlock, uuidv4 } from '../../utils.js';
-import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, regex_placement, RegexProvider, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
+import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, REGEX_REPLACE_MODE, regex_placement, RegexProvider, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
 import { t } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
@@ -779,6 +779,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
 
             editorHtml.find('.find_regex').val(existingScript.findRegex || '');
             editorHtml.find('.regex_replace_string').val(existingScript.replaceString || '');
+            editorHtml.find('.regex_replace_mode').val(existingScript.replaceMode ?? REGEX_REPLACE_MODE.TEXT);
             editorHtml.find('.regex_trim_strings').val(existingScript.trimStrings?.join('\n') || []);
             editorHtml.find('input[name="disabled"]').prop('checked', existingScript.disabled ?? false);
             editorHtml.find('input[name="only_format_display"]').prop('checked', existingScript.markdownOnly ?? false);
@@ -825,6 +826,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             scriptName: editorHtml.find('.regex_script_name').val().toString(),
             findRegex: editorHtml.find('.find_regex').val().toString(),
             replaceString: editorHtml.find('.regex_replace_string').val().toString(),
+            replaceMode: String(editorHtml.find('.regex_replace_mode').val() ?? REGEX_REPLACE_MODE.TEXT),
             trimStrings: String(editorHtml.find('.regex_trim_strings').val()).split('\n').filter((e) => e.length !== 0) || [],
             substituteRegex: Number(editorHtml.find('select[name="substitute_regex"]').val()),
             disabled: false,
@@ -840,7 +842,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
         editorHtml.find('#regex_test_output').text(result);
     }
 
-    editorHtml.find('input, textarea, select').on('input', updateTestResult);
+    editorHtml.find('input, textarea, select').on('input change', updateTestResult);
     updateInfoBlock(editorHtml);
 
     const popupResult = await callGenericPopup(editorHtml, POPUP_TYPE.CONFIRM, '', { okButton: t`Save`, cancelButton: t`Cancel`, allowVerticalScrolling: true });
@@ -850,6 +852,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             scriptName: String(editorHtml.find('.regex_script_name').val()),
             findRegex: String(editorHtml.find('.find_regex').val()),
             replaceString: String(editorHtml.find('.regex_replace_string').val()),
+            replaceMode: String(editorHtml.find('.regex_replace_mode').val() ?? REGEX_REPLACE_MODE.TEXT),
             trimStrings: String(editorHtml.find('.regex_trim_strings').val()).split('\n').filter((e) => e.length !== 0) || [],
             placement:
                 editorHtml
@@ -956,6 +959,19 @@ function executeRegexScriptForDebugging(script, text) {
 
     if (matches.length === 0) {
         return { output: text, highlightedOutput: escapeHtml(text), error: null, charsCaptured: 0, charsAdded: 0, charsRemoved: 0 };
+    }
+
+    if (script.replaceMode === REGEX_REPLACE_MODE.JAVASCRIPT) {
+        const output = runRegexScript(script, text);
+        const charsCaptured = matches.reduce((total, match) => total + match[0].length, 0);
+        return {
+            output,
+            highlightedOutput: escapeHtml(output),
+            error: null,
+            charsCaptured,
+            charsAdded: Math.max(output.length - text.length, 0),
+            charsRemoved: Math.max(text.length - output.length, 0),
+        };
     }
 
     let outputText = '';

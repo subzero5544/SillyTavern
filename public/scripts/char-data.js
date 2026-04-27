@@ -90,6 +90,7 @@
 * @property {string} scriptName - The name of the script
 * @property {string} findRegex - The regex to find
 * @property {string} replaceString - The string to replace
+* @property {string} [replaceMode] - How replaceString is interpreted: text or javascript
 * @property {string[]} trimStrings - The strings to trim
 * @property {number[]} placement - The placement of the script
 * @property {boolean} disabled - Whether the script is disabled

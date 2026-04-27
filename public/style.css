@@ -4568,6 +4568,42 @@ input[type="range"]::-webkit-slider-thumb {
     opacity: 1;
 }
 
+.quick_selection_editor {
+    position: fixed;
+    z-index: 4000;
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    background-color: var(--SmartThemeBlurTintColor);
+    box-shadow: 0 2px 10px var(--black50a);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength));
+}
+
+.quick_selection_editor .menu_button {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    margin: 0;
+    padding: 0;
+    font-size: 0.85rem;
+}
+
+@media (pointer: coarse) {
+    .quick_selection_editor {
+        gap: 6px;
+        padding: 4px;
+    }
+
+    .quick_selection_editor .menu_button {
+        width: 38px;
+        height: 38px;
+        min-width: 38px;
+        font-size: 1rem;
+    }
+}
+
 .mes_bookmark {
     display: none;
 }
