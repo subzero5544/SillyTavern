@@ -219,6 +219,225 @@
     margin-bottom: 0.5em;
 }
 
+.prompt-manager-category-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 4px 0;
+    flex-wrap: wrap;
+}
+
+.prompt-manager-category-toolbar-button {
+    min-height: unset !important;
+    padding: 3px 8px !important;
+    line-height: 1.2 !important;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list.prompt-manager-categories-enabled li {
+    grid-template-columns: 4fr 108px 45px;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list.prompt-manager-categories-enabled .prompt_manager_prompt_controls {
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-header,
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-uncategorized-header {
+    display: flex !important;
+    grid-template-columns: unset !important;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    margin: 6px 0 4px;
+    padding: 5px 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-left: 3px solid var(--SmartThemeQuoteColor);
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 9%, var(--SmartThemeBlurTintColor));
+    color: var(--SmartThemeBodyColor);
+    cursor: pointer;
+    user-select: none;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-header:hover {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, var(--SmartThemeBlurTintColor));
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-header {
+    cursor: grab;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-header:active {
+    cursor: grabbing;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-uncategorized-header {
+    cursor: default;
+    border-left-color: var(--SmartThemeBorderColor);
+    background-color: color-mix(in srgb, var(--SmartThemeBorderColor) 10%, var(--SmartThemeBlurTintColor));
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-header.prompt-manager-category-collapsed {
+    opacity: 0.72;
+    border-left-color: var(--SmartThemeBorderColor);
+}
+
+.prompt-manager-category-drag-handle,
+.prompt-manager-category-collapse,
+.prompt-manager-category-rename,
+.prompt-manager-category-delete {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    min-width: 30px;
+    min-height: 30px;
+    opacity: 0.65;
+    padding: 0;
+}
+
+.prompt-manager-category-drag-handle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    opacity: 0.5;
+}
+
+.prompt-manager-category-collapse {
+    transition: transform var(--animation-duration-2x) ease-in-out;
+}
+
+.prompt-manager-category-header.prompt-manager-category-collapsed .prompt-manager-category-collapse {
+    transform: rotate(-90deg);
+}
+
+.prompt-manager-category-drag-handle:hover,
+.prompt-manager-category-rename:hover,
+.prompt-manager-category-delete:hover,
+.prompt-manager-category-collapse:hover {
+    opacity: 1;
+}
+
+.prompt-manager-category-delete:hover {
+    color: var(--fullred);
+}
+
+.prompt-manager-category-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prompt-manager-category-count {
+    flex: 0 0 auto;
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBlurTintColor);
+    font-size: calc(var(--mainFontSize) * 0.75);
+    font-weight: 700;
+    text-align: center;
+}
+
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-collapsed-prompt {
+    display: none !important;
+}
+
+.prompt-manager-category-action {
+    color: var(--SmartThemeQuoteColor);
+}
+
+.prompt-manager-category-menu {
+    position: fixed;
+    z-index: 99999;
+    width: min(280px, calc(100vw - 16px));
+    max-height: min(360px, calc(100vh - 16px));
+    overflow-y: auto;
+    padding: 5px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    background-color: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+
+.prompt-manager-category-menu-title {
+    padding: 5px 8px;
+    font-size: calc(var(--mainFontSize) * 0.78);
+    font-weight: 700;
+    opacity: 0.65;
+    text-transform: uppercase;
+}
+
+.prompt-manager-category-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 32px;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.prompt-manager-category-menu-item:hover,
+.prompt-manager-category-menu-item.active {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 16%, transparent);
+}
+
+.prompt-manager-category-menu-item span {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prompt-manager-category-menu-check {
+    flex: 0 0 auto;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.prompt-manager-category-menu-separator {
+    height: 1px;
+    margin: 4px 2px;
+    background-color: var(--SmartThemeBorderColor);
+    opacity: 0.5;
+}
+
+@media screen and (max-width: 600px) {
+    #completion_prompt_manager #completion_prompt_manager_list.prompt-manager-categories-enabled li {
+        grid-template-columns: minmax(0, 1fr) 112px 38px;
+    }
+
+    #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-category-header,
+    #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-uncategorized-header {
+        padding: 5px 6px;
+    }
+
+    .prompt-manager-category-drag-handle,
+    .prompt-manager-category-collapse,
+    .prompt-manager-category-rename,
+    .prompt-manager-category-delete {
+        min-width: 36px;
+        min-height: 36px;
+    }
+
+    .prompt-manager-category-drag-handle {
+        display: flex;
+    }
+
+    .prompt-manager-category-menu-item {
+        min-height: 38px;
+    }
+}
+
 #completion_prompt_manager .completion_prompt_manager_header {
     display: flex;
     flex-direction: row;

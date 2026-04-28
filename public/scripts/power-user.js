@@ -191,6 +191,10 @@ export const power_user = {
     allow_name2_display: false,
     hotswap_enabled: true,
     favorites_carousel_infinite: true,
+    prompt_categories_enabled: false,
+    prompt_categories: {
+        chat_completion: {},
+    },
     timer_enabled: true,
     timestamps_enabled: true,
     timestamp_model_icon: false,
@@ -476,6 +480,11 @@ function switchHotswap() {
 function switchFavoritesCarouselInfinite() {
     $('#favoritesCarouselInfinite').prop('checked', power_user.favorites_carousel_infinite);
     setHotswapsDebounced();
+}
+
+function switchPromptCategories() {
+    $('#promptCategoriesEnabled').prop('checked', power_user.prompt_categories_enabled);
+    document.dispatchEvent(new CustomEvent('prompt_categories_setting_changed'));
 }
 
 function switchTimer() {
@@ -1639,6 +1648,18 @@ export async function loadPowerUserSettings(settings, data) {
         power_user.chat_width = 50;
     }
 
+    if (typeof power_user.prompt_categories_enabled !== 'boolean') {
+        power_user.prompt_categories_enabled = false;
+    }
+
+    if (!power_user.prompt_categories || typeof power_user.prompt_categories !== 'object') {
+        power_user.prompt_categories = { chat_completion: {} };
+    }
+
+    if (!power_user.prompt_categories.chat_completion || typeof power_user.prompt_categories.chat_completion !== 'object') {
+        power_user.prompt_categories.chat_completion = {};
+    }
+
     if (power_user.tokenizer === tokenizers.LEGACY) {
         power_user.tokenizer = tokenizers.GPT2;
     }
@@ -1722,6 +1743,7 @@ export async function loadPowerUserSettings(settings, data) {
     //$("#removeXML").prop("checked", power_user.removeXML);
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
     $('#favoritesCarouselInfinite').prop('checked', power_user.favorites_carousel_infinite);
+    $('#promptCategoriesEnabled').prop('checked', power_user.prompt_categories_enabled);
     $('#messageTimerEnabled').prop('checked', power_user.timer_enabled);
     $('#messageTimestampsEnabled').prop('checked', power_user.timestamps_enabled);
     $('#messageModelIconEnabled').prop('checked', power_user.timestamp_model_icon);
@@ -3773,6 +3795,13 @@ jQuery(() => {
         const value = !!$(this).prop('checked');
         power_user.favorites_carousel_infinite = value;
         switchFavoritesCarouselInfinite();
+        saveSettingsDebounced();
+    });
+
+    $('#promptCategoriesEnabled').on('input', function () {
+        const value = !!$(this).prop('checked');
+        power_user.prompt_categories_enabled = value;
+        switchPromptCategories();
         saveSettingsDebounced();
     });
 

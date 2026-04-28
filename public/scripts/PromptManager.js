@@ -2,7 +2,7 @@
 
 import { DOMPurify } from '../lib.js';
 
-import { event_types, eventSource, is_send_press, main_api, substituteParams } from '../script.js';
+import { event_types, eventSource, is_send_press, main_api, saveSettingsDebounced, substituteParams } from '../script.js';
 import { is_group_generating } from './group-chats.js';
 import { Message, MessageCollection, TokenHandler } from './openai.js';
 import { power_user } from './power-user.js';
@@ -415,6 +415,11 @@ class PromptManager {
         /** Character reset button click*/
         this.handleCharacterReset = () => { };
 
+        /** Prompt categories setting changed */
+        this.handlePromptCategoriesSettingChanged = () => {
+            this.render(false);
+        };
+
         /** Debounced version of render */
         this.renderDebounced = debounce(this.render.bind(this), debounce_timeout.relaxed);
     }
@@ -434,6 +439,8 @@ class PromptManager {
         this.tokenHandler = this.tokenHandler || new TokenHandler(() => { throw new Error('Token handler not set'); });
         this.serviceSettings = serviceSettings;
         this.containerElement = document.getElementById(this.configuration.containerIdentifier);
+        document.removeEventListener('prompt_categories_setting_changed', this.handlePromptCategoriesSettingChanged);
+        document.addEventListener('prompt_categories_setting_changed', this.handlePromptCategoriesSettingChanged);
 
         if ('global' === this.configuration.promptOrder.strategy) this.activeCharacter = { id: this.configuration.promptOrder.dummyId };
 
@@ -891,6 +898,558 @@ class PromptManager {
             }
         }).catch(() => {
             console.log('Timeout while waiting for send press to be false');
+        });
+    }
+
+    /**
+     * Whether local prompt categories are enabled for the prompt manager.
+     * @returns {boolean}
+     */
+    arePromptCategoriesEnabled() {
+        return Boolean(power_user.prompt_categories_enabled);
+    }
+
+    /**
+     * Gets the local settings key for the current chat completion preset.
+     * @returns {string}
+     */
+    getPromptCategoryPresetKey() {
+        const selectedPreset = this.serviceSettings?.preset_settings_openai || document.getElementById('settings_preset_openai')?.selectedOptions?.[0]?.textContent;
+        return String(selectedPreset || 'Default').trim() || 'Default';
+    }
+
+    /**
+     * Gets or creates the WH-local prompt category state for the current preset.
+     * @returns {{categories: {id: string, name: string, order: number, collapsed: boolean}[], assignments: Record<string, string>}}
+     */
+    getPromptCategoryState() {
+        if (!power_user.prompt_categories || typeof power_user.prompt_categories !== 'object') {
+            power_user.prompt_categories = { chat_completion: {} };
+        }
+
+        if (!power_user.prompt_categories.chat_completion || typeof power_user.prompt_categories.chat_completion !== 'object') {
+            power_user.prompt_categories.chat_completion = {};
+        }
+
+        const presetKey = this.getPromptCategoryPresetKey();
+        const chatCompletionState = power_user.prompt_categories.chat_completion;
+        if (!chatCompletionState[presetKey] || typeof chatCompletionState[presetKey] !== 'object') {
+            chatCompletionState[presetKey] = { categories: [], assignments: {} };
+        }
+
+        const state = chatCompletionState[presetKey];
+        if (!Array.isArray(state.categories)) state.categories = [];
+        if (!state.assignments || typeof state.assignments !== 'object') state.assignments = {};
+
+        state.categories = state.categories
+            .filter(category => category && typeof category.id === 'string' && typeof category.name === 'string')
+            .map((category, index) => ({
+                id: category.id,
+                name: category.name,
+                order: Number.isFinite(category.order) ? category.order : index,
+                collapsed: Boolean(category.collapsed),
+            }));
+
+        return state;
+    }
+
+    /**
+     * Gets sorted prompt categories for the current preset.
+     * @returns {{id: string, name: string, order: number, collapsed: boolean}[]}
+     */
+    getPromptCategories() {
+        return [...this.getPromptCategoryState().categories].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    }
+
+    /**
+     * Gets a category by id.
+     * @param {string} categoryId Category id
+     * @returns {{id: string, name: string, order: number, collapsed: boolean}|null}
+     */
+    getPromptCategoryById(categoryId) {
+        return this.getPromptCategoryState().categories.find(category => category.id === categoryId) || null;
+    }
+
+    /**
+     * Gets the assigned category for a prompt.
+     * @param {string} promptId Prompt identifier
+     * @returns {{id: string, name: string, order: number, collapsed: boolean}|null}
+     */
+    getPromptCategoryForPrompt(promptId) {
+        const state = this.getPromptCategoryState();
+        const categoryId = state.assignments[promptId];
+        const category = categoryId ? this.getPromptCategoryById(categoryId) : null;
+        if (!category && categoryId) {
+            delete state.assignments[promptId];
+        }
+        return category;
+    }
+
+    /**
+     * Assigns a prompt to a local category.
+     * @param {string} promptId Prompt identifier
+     * @param {string|null} categoryId Category id
+     */
+    setPromptCategoryForPrompt(promptId, categoryId) {
+        const state = this.getPromptCategoryState();
+        if (!categoryId) {
+            delete state.assignments[promptId];
+        } else {
+            state.assignments[promptId] = categoryId;
+        }
+        this.syncPromptOrderFromCategoryState();
+        saveSettingsDebounced();
+    }
+
+    /**
+     * Saves prompt order entries by visible DOM/prompt identifier order.
+     * @param {string[]} promptIdentifiers Ordered prompt identifiers
+     */
+    savePromptOrderByIdentifiers(promptIdentifiers) {
+        if (!this.activeCharacter) return;
+
+        const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
+        const idToObjectMap = new Map(promptOrder.map(prompt => [prompt.identifier, prompt]));
+        const updatedPromptOrder = promptIdentifiers.map(identifier => idToObjectMap.get(identifier)).filter(Boolean);
+
+        this.removePromptOrderForCharacter(this.activeCharacter);
+        this.addPromptOrderForCharacter(this.activeCharacter, updatedPromptOrder);
+    }
+
+    /**
+     * Rebuilds the saved prompt order from current category assignment and category order.
+     */
+    syncPromptOrderFromCategoryState() {
+        if (!this.arePromptCategoriesEnabled() || !this.activeCharacter) return;
+
+        const state = this.getPromptCategoryState();
+        const categories = this.getPromptCategories();
+        const categoryIds = new Set(categories.map(category => category.id));
+        const currentPromptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
+        const currentPromptIds = currentPromptOrder.map(entry => entry.identifier);
+        const orderedPromptIds = [];
+
+        for (const category of categories) {
+            for (const promptId of currentPromptIds) {
+                if (state.assignments[promptId] === category.id) {
+                    orderedPromptIds.push(promptId);
+                }
+            }
+        }
+
+        for (const promptId of currentPromptIds) {
+            const categoryId = state.assignments[promptId];
+            if (!categoryId || !categoryIds.has(categoryId)) {
+                orderedPromptIds.push(promptId);
+            }
+        }
+
+        this.savePromptOrderByIdentifiers(orderedPromptIds);
+        this.saveServiceSettings();
+    }
+
+    /**
+     * Creates a category and returns its id.
+     * @returns {Promise<string|null>}
+     */
+    async createPromptCategory() {
+        const name = String(await Popup.show.input('New category', 'Enter a category name:', '') || '').trim();
+        if (!name) return null;
+
+        const state = this.getPromptCategoryState();
+        const existing = state.categories.find(category => category.name.toLowerCase() === name.toLowerCase());
+        if (existing) return existing.id;
+
+        const id = this.getUuidv4();
+        state.categories.push({
+            id,
+            name,
+            order: state.categories.length,
+            collapsed: false,
+        });
+        saveSettingsDebounced();
+        return id;
+    }
+
+    /**
+     * Renames a category.
+     * @param {string} categoryId Category id
+     */
+    async renamePromptCategory(categoryId) {
+        const state = this.getPromptCategoryState();
+        const category = state.categories.find(item => item.id === categoryId);
+        if (!category) return;
+
+        const name = String(await Popup.show.input('Rename category', 'Enter a new category name:', category.name) || '').trim();
+        if (!name || name === category.name) return;
+
+        const duplicate = state.categories.find(item => item.id !== categoryId && item.name.toLowerCase() === name.toLowerCase());
+        if (duplicate) return;
+
+        category.name = name;
+        saveSettingsDebounced();
+        this.render(false);
+    }
+
+    /**
+     * Deletes a category and leaves its prompts uncategorized.
+     * @param {string} categoryId Category id
+     */
+    async deletePromptCategory(categoryId) {
+        const category = this.getPromptCategoryById(categoryId);
+        if (!category) return;
+
+        const confirmed = await Popup.show.confirm('Delete category?', `Prompts in "${escapeHtml(category.name)}" will become uncategorized.`);
+        if (!confirmed) return;
+
+        const state = this.getPromptCategoryState();
+        state.categories = state.categories.filter(item => item.id !== categoryId);
+        for (const promptId of Object.keys(state.assignments)) {
+            if (state.assignments[promptId] === categoryId) {
+                delete state.assignments[promptId];
+            }
+        }
+        state.categories.forEach((item, index) => item.order = index);
+        saveSettingsDebounced();
+        this.render(false);
+    }
+
+    /**
+     * Toggles category collapse state.
+     * @param {string} categoryId Category id
+     */
+    togglePromptCategoryCollapsed(categoryId) {
+        const category = this.getPromptCategoryById(categoryId);
+        if (!category) return;
+
+        category.collapsed = !category.collapsed;
+        saveSettingsDebounced();
+        this.render(false);
+    }
+
+    /**
+     * Closes the prompt category assignment menu.
+     */
+    closePromptCategoryMenu() {
+        $('.prompt-manager-category-menu').remove();
+        $(document).off('mousedown.promptCategoryMenu touchstart.promptCategoryMenu keydown.promptCategoryMenu');
+    }
+
+    /**
+     * Shows a small assignment menu for a prompt category button.
+     * @param {string} promptId Prompt identifier
+     * @param {HTMLElement} anchorElement Button that opened the menu
+     */
+    showPromptCategoryMenu(promptId, anchorElement) {
+        this.closePromptCategoryMenu();
+
+        const currentCategory = this.getPromptCategoryForPrompt(promptId);
+        const categories = this.getPromptCategories();
+        const $menu = $('<div class="prompt-manager-category-menu" />');
+        const $title = $('<div class="prompt-manager-category-menu-title" />').text('Assign category');
+        $menu.append($title);
+
+        const addItem = (label, icon, active, handler) => {
+            const $item = $('<button type="button" class="prompt-manager-category-menu-item" />');
+            if (active) $item.addClass('active');
+            $item.append($('<i />').addClass(`fa-solid ${icon} fa-fw`));
+            $item.append($('<span />').text(label));
+            if (active) $item.append($('<i class="fa-solid fa-check fa-fw prompt-manager-category-menu-check" />'));
+            $item.on('click', async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                await handler();
+            });
+            $menu.append($item);
+        };
+
+        addItem('Uncategorized', 'fa-folder-open', !currentCategory, async () => {
+            this.setPromptCategoryForPrompt(promptId, null);
+            this.closePromptCategoryMenu();
+            this.render(false);
+        });
+
+        if (categories.length) {
+            $menu.append($('<div class="prompt-manager-category-menu-separator" />'));
+            for (const category of categories) {
+                addItem(category.name, 'fa-folder', currentCategory?.id === category.id, async () => {
+                    this.setPromptCategoryForPrompt(promptId, category.id);
+                    this.closePromptCategoryMenu();
+                    this.render(false);
+                });
+            }
+        }
+
+        $menu.append($('<div class="prompt-manager-category-menu-separator" />'));
+        addItem('New category...', 'fa-folder-plus', false, async () => {
+            const categoryId = await this.createPromptCategory();
+            if (categoryId) {
+                this.setPromptCategoryForPrompt(promptId, categoryId);
+                this.closePromptCategoryMenu();
+                this.render(false);
+            }
+        });
+
+        $menu.on('mousedown touchstart click', event => event.stopPropagation());
+        $('body').append($menu);
+
+        const rect = anchorElement.getBoundingClientRect();
+        const menuWidth = $menu.outerWidth();
+        const menuHeight = $menu.outerHeight();
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+        const top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8));
+        $menu.css({ left, top });
+
+        setTimeout(() => {
+            $(document).on('mousedown.promptCategoryMenu touchstart.promptCategoryMenu', event => {
+                if ($(event.target).closest('.prompt-manager-category-menu').length) return;
+                this.closePromptCategoryMenu();
+            });
+            $(document).on('keydown.promptCategoryMenu', event => {
+                if (event.key === 'Escape') this.closePromptCategoryMenu();
+            });
+        }, 0);
+    }
+
+    /**
+     * Renders the prompt category toolbar.
+     * @param {HTMLElement} promptManagerDiv Prompt manager root
+     */
+    renderPromptCategoryToolbar(promptManagerDiv) {
+        if (!this.arePromptCategoriesEnabled()) return;
+
+        const listElement = promptManagerDiv.querySelector(`#${this.configuration.prefix}prompt_manager_list`);
+        if (!listElement) return;
+
+        const toolbar = document.createElement('div');
+        toolbar.classList.add('prompt-manager-category-toolbar');
+        toolbar.innerHTML = `
+            <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="new" title="New category"><i class="fa-solid fa-folder-plus"></i></button>
+            <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="expand" title="Expand all categories"><i class="fa-solid fa-angles-down"></i></button>
+            <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="collapse" title="Collapse all categories"><i class="fa-solid fa-angles-up"></i></button>
+        `;
+
+        toolbar.addEventListener('click', async (event) => {
+            const button = event.target instanceof HTMLElement ? event.target.closest('[data-pm-category-action]') : null;
+            if (!(button instanceof HTMLElement)) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const action = button.dataset.pmCategoryAction;
+            if (action === 'new') {
+                await this.createPromptCategory();
+                this.render(false);
+                return;
+            }
+
+            const state = this.getPromptCategoryState();
+            if (action === 'expand') {
+                state.categories.forEach(category => category.collapsed = false);
+            } else if (action === 'collapse') {
+                state.categories.forEach(category => category.collapsed = true);
+            }
+            saveSettingsDebounced();
+            this.render(false);
+        });
+
+        listElement.insertAdjacentElement('beforebegin', toolbar);
+    }
+
+    /**
+     * Renders a prompt category header row.
+     * @param {{id: string, name: string, collapsed: boolean}} category Category object
+     * @param {number} count Number of prompts in the category
+     * @returns {string}
+     */
+    renderPromptCategoryHeader(category, count) {
+        const collapsedClass = category.collapsed ? ' prompt-manager-category-collapsed' : '';
+        return `
+            <li class="prompt-manager-category-header${collapsedClass}" data-pm-category-id="${escapeHtml(category.id)}">
+                <span class="prompt-manager-category-drag-handle drag-handle fa-solid fa-grip-lines" title="Drag to reorder category"></span>
+                <button type="button" class="prompt-manager-category-collapse fa-solid fa-chevron-down" title="Expand or collapse category"></button>
+                <span class="prompt-manager-category-name" title="${escapeHtml(category.name)}">${escapeHtml(category.name)}</span>
+                <span class="prompt-manager-category-count">${count}</span>
+                <button type="button" class="prompt-manager-category-rename fa-solid fa-pencil" title="Rename category"></button>
+                <button type="button" class="prompt-manager-category-delete fa-solid fa-trash-can" title="Delete category"></button>
+            </li>
+        `;
+    }
+
+    /**
+     * Renders an uncategorized prompt header.
+     * @param {number} count Number of uncategorized prompts
+     * @returns {string}
+     */
+    renderUncategorizedPromptHeader(count) {
+        return `
+            <li class="prompt-manager-uncategorized-header" data-pm-category-id="">
+                <span class="prompt-manager-category-name">Uncategorized</span>
+                <span class="prompt-manager-category-count">${count}</span>
+            </li>
+        `;
+    }
+
+    /**
+     * Inserts category headers and groups rendered prompt rows.
+     * @param {HTMLElement} promptManagerList Prompt manager list element
+     */
+    applyPromptCategoryGrouping(promptManagerList) {
+        if (!this.arePromptCategoriesEnabled()) return;
+
+        const $list = $(promptManagerList);
+        $list.children('.prompt-manager-category-header').remove();
+        $list.children('.prompt-manager-uncategorized-header').remove();
+        $list.children('.prompt-manager-category-collapsed-prompt').removeClass('prompt-manager-category-collapsed-prompt');
+
+        const $headRow = $list.children(`.${this.configuration.prefix}prompt_manager_list_head`).detach();
+        const $separator = $list.children(`.${this.configuration.prefix}prompt_manager_list_separator`).detach();
+        const $promptRows = $list.children(`.${this.configuration.prefix}prompt_manager_prompt[data-pm-identifier]`).detach();
+        const state = this.getPromptCategoryState();
+        const categories = this.getPromptCategories();
+        const categoryIds = new Set(categories.map(category => category.id));
+        const groupedRows = new Map(categories.map(category => [category.id, []]));
+        const uncategorizedRows = [];
+
+        $promptRows.each((_, element) => {
+            const promptId = element.dataset.pmIdentifier;
+            const categoryId = state.assignments[promptId];
+            if (categoryId && categoryIds.has(categoryId)) {
+                groupedRows.get(categoryId).push(element);
+            } else {
+                uncategorizedRows.push(element);
+            }
+        });
+
+        $list.append($headRow, $separator);
+
+        for (const category of categories) {
+            const rows = groupedRows.get(category.id) || [];
+            $list.append(this.renderPromptCategoryHeader(category, rows.length));
+            for (const row of rows) {
+                if (category.collapsed) row.classList.add('prompt-manager-category-collapsed-prompt');
+                $list.append(row);
+            }
+        }
+
+        if (uncategorizedRows.length || categories.length) {
+            $list.append(this.renderUncategorizedPromptHeader(uncategorizedRows.length));
+            for (const row of uncategorizedRows) {
+                $list.append(row);
+            }
+        }
+    }
+
+    /**
+     * Persists prompt order and prompt category assignments from the current DOM order.
+     * @param {HTMLElement} promptManagerList Prompt manager list element
+     */
+    syncPromptCategoryStateFromList(promptManagerList) {
+        const state = this.getPromptCategoryState();
+        const categories = this.getPromptCategories();
+        const categoryIds = new Set(categories.map(category => category.id));
+        const promptIdentifiers = [];
+        let currentCategoryId = null;
+
+        for (const child of Array.from(promptManagerList.children)) {
+            if (!(child instanceof HTMLElement)) continue;
+
+            if (child.classList.contains('prompt-manager-category-header')) {
+                const categoryId = child.dataset.pmCategoryId;
+                currentCategoryId = categoryId && categoryIds.has(categoryId) ? categoryId : null;
+                continue;
+            }
+
+            if (child.classList.contains('prompt-manager-uncategorized-header')) {
+                currentCategoryId = null;
+                continue;
+            }
+
+            if (child.matches(`.${this.configuration.prefix}prompt_manager_prompt[data-pm-identifier]`)) {
+                const promptId = child.dataset.pmIdentifier;
+                if (!promptId) continue;
+
+                promptIdentifiers.push(promptId);
+                if (currentCategoryId) {
+                    state.assignments[promptId] = currentCategoryId;
+                } else {
+                    delete state.assignments[promptId];
+                }
+            }
+        }
+
+        this.savePromptOrderByIdentifiers(promptIdentifiers);
+        saveSettingsDebounced();
+        this.saveServiceSettings();
+    }
+
+    /**
+     * Persists category order from the current DOM header order.
+     * @param {HTMLElement} promptManagerList Prompt manager list element
+     */
+    syncPromptCategoryOrderFromList(promptManagerList) {
+        const state = this.getPromptCategoryState();
+        const categoryOrder = Array.from(promptManagerList.querySelectorAll('.prompt-manager-category-header'))
+            .map(element => element instanceof HTMLElement ? element.dataset.pmCategoryId : null)
+            .filter(Boolean);
+
+        categoryOrder.forEach((categoryId, order) => {
+            const category = state.categories.find(item => item.id === categoryId);
+            if (category) category.order = order;
+        });
+
+        this.syncPromptOrderFromCategoryState();
+        saveSettingsDebounced();
+    }
+
+    /**
+     * Adds prompt category event handlers after the list is rendered.
+     * @param {HTMLElement} promptManagerList Prompt manager list element
+     */
+    bindPromptCategoryEvents(promptManagerList) {
+        if (!this.arePromptCategoriesEnabled()) return;
+
+        Array.from(promptManagerList.getElementsByClassName('prompt-manager-category-action')).forEach(el => {
+            el.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const prompt = event.target instanceof HTMLElement ? event.target.closest('[data-pm-identifier]') : null;
+                if (!(prompt instanceof HTMLElement)) return;
+                this.showPromptCategoryMenu(prompt.dataset.pmIdentifier, /** @type {HTMLElement} */(el));
+            });
+        });
+
+        Array.from(promptManagerList.getElementsByClassName('prompt-manager-category-header')).forEach(el => {
+            el.addEventListener('click', async event => {
+                const header = /** @type {HTMLElement} */(el);
+                const categoryId = header.dataset.pmCategoryId;
+                if (!categoryId) return;
+
+                const target = event.target instanceof HTMLElement ? event.target : null;
+                if (target?.closest('.prompt-manager-category-drag-handle')) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                }
+
+                if (target?.closest('.prompt-manager-category-rename')) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await this.renamePromptCategory(categoryId);
+                    return;
+                }
+
+                if (target?.closest('.prompt-manager-category-delete')) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await this.deletePromptCategory(categoryId);
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                this.togglePromptCategoryCollapsed(categoryId);
+            });
         });
     }
 
@@ -1615,6 +2174,7 @@ class PromptManager {
         promptManagerDiv.insertAdjacentHTML('beforeend', headerHtml);
 
         this.listElement = promptManagerDiv.querySelector(`#${this.configuration.prefix}prompt_manager_list`);
+        this.renderPromptCategoryToolbar(promptManagerDiv);
 
         if (null !== this.activeCharacter) {
             const prompts = [...this.serviceSettings.prompts]
@@ -1658,6 +2218,8 @@ class PromptManager {
         promptManagerList.innerHTML = '';
 
         const { prefix } = this.configuration;
+        const promptCategoriesEnabled = this.arePromptCategoriesEnabled();
+        promptManagerList.classList.toggle('prompt-manager-categories-enabled', promptCategoriesEnabled);
 
         let listItemHtml = await renderTemplateAsync('promptManagerListHeader', { prefix });
 
@@ -1735,6 +2297,11 @@ class PromptManager {
             };
             const roleIcon = promptRoles[iconLookup]?.roleIcon || '';
             const roleTitle = promptRoles[iconLookup]?.roleTitle || '';
+            const category = promptCategoriesEnabled ? this.getPromptCategoryForPrompt(prompt.identifier) : null;
+            const categoryTitle = category ? `Category: ${category.name}` : 'Assign category';
+            const categorySpanHtml = promptCategoriesEnabled ? `
+                                <span title="${escapeHtml(categoryTitle)}" class="prompt-manager-category-action fa-solid ${category ? 'fa-folder' : 'fa-folder-open'} fa-xs"></span>
+            ` : '';
 
             listItemHtml += `
                 <li class="${prefix}prompt_manager_prompt ${draggableClass} ${enabledClass} ${markerClass} ${importantClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}">
@@ -1752,6 +2319,7 @@ class PromptManager {
                     </span>
                     <span>
                             <span class="prompt_manager_prompt_controls">
+                                ${categorySpanHtml}
                                 ${detachSpanHtml}
                                 ${editSpanHtml}
                                 ${toggleSpanHtml}
@@ -1764,6 +2332,7 @@ class PromptManager {
         });
 
         promptManagerList.insertAdjacentHTML('beforeend', listItemHtml);
+        this.applyPromptCategoryGrouping(promptManagerList);
 
         // Now that the new elements are in the DOM, you can add the event listeners.
         Array.from(promptManagerList.getElementsByClassName('prompt-manager-detach-action')).forEach(el => {
@@ -1781,6 +2350,8 @@ class PromptManager {
         Array.from(promptManagerList.querySelectorAll('.prompt-manager-toggle-action')).forEach(el => {
             el.addEventListener('click', this.handleToggle);
         });
+
+        this.bindPromptCategoryEvents(promptManagerList);
     }
 
     /**
@@ -1916,21 +2487,30 @@ class PromptManager {
      * @returns {void}
      */
     makeDraggable() {
-        $(`#${this.configuration.prefix}prompt_manager_list`).sortable({
+        const $promptManagerList = $(`#${this.configuration.prefix}prompt_manager_list`);
+        const categoriesEnabled = this.arePromptCategoriesEnabled();
+        $promptManagerList.sortable({
             delay: this.configuration.sortableDelay,
-            handle: isMobile() ? '.drag-handle' : null,
-            items: `.${this.configuration.prefix}prompt_manager_prompt_draggable`,
+            handle: isMobile() ? '.drag-handle, .prompt-manager-category-drag-handle' : null,
+            items: categoriesEnabled
+                ? `.${this.configuration.prefix}prompt_manager_prompt_draggable:not(.prompt-manager-category-collapsed-prompt), .prompt-manager-category-header`
+                : `.${this.configuration.prefix}prompt_manager_prompt_draggable`,
             update: (event, ui) => {
-                const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
-                const promptListElement = $(`#${this.configuration.prefix}prompt_manager_list`).sortable('toArray', { attribute: 'data-pm-identifier' });
-                const idToObjectMap = new Map(promptOrder.map(prompt => [prompt.identifier, prompt]));
-                const updatedPromptOrder = promptListElement.map(identifier => idToObjectMap.get(identifier));
+                if (categoriesEnabled && ui.item.hasClass('prompt-manager-category-header')) {
+                    this.syncPromptCategoryOrderFromList($promptManagerList[0]);
+                    this.render(false);
+                    return;
+                }
 
-                this.removePromptOrderForCharacter(this.activeCharacter);
-                this.addPromptOrderForCharacter(this.activeCharacter, updatedPromptOrder);
+                if (categoriesEnabled) {
+                    this.syncPromptCategoryStateFromList($promptManagerList[0]);
+                    this.render(false);
+                    return;
+                }
 
+                const promptListElement = $promptManagerList.sortable('toArray', { attribute: 'data-pm-identifier' });
+                this.savePromptOrderByIdentifiers(promptListElement);
                 this.log(`Prompt order updated for ${this.activeCharacter.name}.`);
-
                 this.saveServiceSettings();
             },
         });
