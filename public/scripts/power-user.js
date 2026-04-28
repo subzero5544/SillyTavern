@@ -69,6 +69,7 @@ import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { persona_description_positions as _persona_description_positions } from './personas.js';
+import { getCurrentUserHandle } from './user.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -4053,6 +4054,15 @@ jQuery(() => {
 
     $('#restore_user_input').on('input', function () {
         power_user.restore_user_input = !!$(this).prop('checked');
+        if (!power_user.restore_user_input) {
+            const userInputKeyPrefix = `${getCurrentUserHandle()}_userInput`;
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+                const key = localStorage.key(i);
+                if (key?.startsWith(userInputKeyPrefix)) {
+                    localStorage.removeItem(key);
+                }
+            }
+        }
         saveSettingsDebounced();
     });
 

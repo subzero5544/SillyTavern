@@ -20,6 +20,8 @@ import {
     sendTextareaMessage,
     doNavbarIconClick,
     isSwipingAllowed,
+    getCurrentChatId,
+    event_types,
 } from '../script.js';
 
 import {
@@ -829,26 +831,109 @@ function OpenNavPanels() {
     }
 }
 
-const getUserInputKey = () => getCurrentUserHandle() + '_userInput';
+const getLegacyUserInputKey = () => getCurrentUserHandle() + '_userInput';
+const getUserInputKey = (chatId = getCurrentChatId()) => chatId ? `${getLegacyUserInputKey()}_${chatId}` : null;
+
+function clearSavedUserInput(key = getUserInputKey()) {
+    if (!key) {
+        return;
+    }
+
+    localStorage.removeItem(key);
+}
 
 function restoreUserInput() {
     if (!power_user.restore_user_input) {
         console.debug('restoreUserInput disabled');
+        clearSavedUserInput();
         return;
     }
 
-    const userInput = localStorage.getItem(getUserInputKey());
-    if (userInput) {
-        $('#send_textarea').val(userInput)[0].dispatchEvent(new Event('input', { bubbles: true }));
+    const userInputKey = getUserInputKey();
+    const sendTextarea = $('#send_textarea');
+    if (!userInputKey) {
+        if (sendTextarea.val() !== '') {
+            sendTextarea.val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return;
+    }
+
+    const legacyUserInputKey = getLegacyUserInputKey();
+    let userInput = localStorage.getItem(userInputKey);
+    if (userInput === null) {
+        userInput = localStorage.getItem(legacyUserInputKey);
+        if (userInput !== null) {
+            localStorage.setItem(userInputKey, userInput);
+            localStorage.removeItem(legacyUserInputKey);
+        }
+    }
+
+    userInput ??= '';
+
+    if (sendTextarea.val() !== userInput) {
+        sendTextarea.val(userInput)[0].dispatchEvent(new Event('input', { bubbles: true }));
     }
 }
 
-function saveUserInput() {
-    const userInput = String($('#send_textarea').val());
-    localStorage.setItem(getUserInputKey(), userInput);
+function saveUserInput(key = getUserInputKey(), value = $('#send_textarea').val()) {
+    if (!key) {
+        return;
+    }
+
+    if (!power_user.restore_user_input) {
+        clearSavedUserInput(key);
+        return;
+    }
+
+    const userInput = String(value);
+    if (userInput) {
+        localStorage.setItem(key, userInput);
+    } else {
+        clearSavedUserInput(key);
+    }
+
     console.debug('User Input -- ', userInput);
 }
 const saveUserInputDebounced = debounce(saveUserInput);
+let pendingUserInputKey = null;
+let pendingUserInputValue = '';
+
+function queueSaveUserInput(key, value) {
+    if (!key) {
+        pendingUserInputKey = null;
+        pendingUserInputValue = '';
+        return;
+    }
+
+    pendingUserInputKey = key;
+    pendingUserInputValue = value;
+    saveUserInputDebounced(key, value);
+}
+
+function flushPendingUserInput() {
+    if (pendingUserInputKey === null) {
+        return;
+    }
+
+    saveUserInput(pendingUserInputKey, pendingUserInputValue);
+    pendingUserInputKey = null;
+    pendingUserInputValue = '';
+}
+
+function saveUserInputImmediately() {
+    saveUserInput(getUserInputKey(), $('#send_textarea').val());
+}
+
+function saveUserInputOnVisibilityChange() {
+    if (document.visibilityState === 'hidden') {
+        saveUserInputImmediately();
+    }
+}
+
+function onChatChangedUserInput() {
+    flushPendingUserInput();
+    restoreUserInput();
+}
 
 // Make the DIV element draggable:
 
@@ -1268,7 +1353,7 @@ export function initRossMods() {
     }
 
     sendTextArea.addEventListener('input', () => {
-        saveUserInputDebounced();
+        queueSaveUserInput(getUserInputKey(), sendTextArea.value);
 
         if (cssAutofit) {
             // Unset modifications made with a manual resize
@@ -1284,6 +1369,10 @@ export function initRossMods() {
         if (needsDebounce) autoFitSendTextAreaDebounced();
         else autoFitSendTextArea();
     });
+    document.addEventListener('visibilitychange', saveUserInputOnVisibilityChange);
+    window.addEventListener('pagehide', saveUserInputImmediately);
+    window.addEventListener('beforeunload', saveUserInputImmediately);
+    eventSource.on(event_types.CHAT_CHANGED, onChatChangedUserInput);
 
     restoreUserInput();
 
