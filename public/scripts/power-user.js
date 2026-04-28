@@ -190,6 +190,7 @@ export const power_user = {
     allow_name1_display: false,
     allow_name2_display: false,
     hotswap_enabled: true,
+    favorites_carousel_infinite: true,
     timer_enabled: true,
     timestamps_enabled: true,
     timestamp_model_icon: false,
@@ -470,6 +471,11 @@ export function fixMarkdown(text, forDisplay) {
 function switchHotswap() {
     $('body').toggleClass('no-hotswap', !power_user.hotswap_enabled);
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
+}
+
+function switchFavoritesCarouselInfinite() {
+    $('#favoritesCarouselInfinite').prop('checked', power_user.favorites_carousel_infinite);
+    setHotswapsDebounced();
 }
 
 function switchTimer() {
@@ -1373,6 +1379,12 @@ function applyTheme(name) {
             },
         },
         {
+            key: 'favorites_carousel_infinite',
+            action: () => {
+                switchFavoritesCarouselInfinite();
+            },
+        },
+        {
             key: 'bogus_folders',
             action: () => {
                 $('#bogus_folders').prop('checked', power_user.bogus_folders);
@@ -1484,6 +1496,7 @@ export function applyPowerUserSettings() {
     switchMovingUI();
     applyNoShadows();
     switchHotswap();
+    switchFavoritesCarouselInfinite();
     switchTimer();
     switchTimestamps();
     switchIcons();
@@ -1708,6 +1721,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#allow_name2_display').prop('checked', power_user.allow_name2_display);
     //$("#removeXML").prop("checked", power_user.removeXML);
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
+    $('#favoritesCarouselInfinite').prop('checked', power_user.favorites_carousel_infinite);
     $('#messageTimerEnabled').prop('checked', power_user.timer_enabled);
     $('#messageTimestampsEnabled').prop('checked', power_user.timestamps_enabled);
     $('#messageModelIconEnabled').prop('checked', power_user.timestamp_model_icon);
@@ -2566,6 +2580,7 @@ export function getThemeObject(name) {
         enableZenSliders: power_user.enableZenSliders,
         enableLabMode: power_user.enableLabMode,
         hotswap_enabled: power_user.hotswap_enabled,
+        favorites_carousel_infinite: power_user.favorites_carousel_infinite,
         custom_css: power_user.custom_css,
         bogus_folders: power_user.bogus_folders,
         zoomed_avatar_magnification: power_user.zoomed_avatar_magnification,
@@ -3751,6 +3766,13 @@ jQuery(() => {
         const value = !!$(this).prop('checked');
         power_user.hotswap_enabled = value;
         switchHotswap();
+        saveSettingsDebounced();
+    });
+
+    $('#favoritesCarouselInfinite').on('input', function () {
+        const value = !!$(this).prop('checked');
+        power_user.favorites_carousel_infinite = value;
+        switchFavoritesCarouselInfinite();
         saveSettingsDebounced();
     });
 

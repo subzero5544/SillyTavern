@@ -313,24 +313,37 @@ export async function favsToHotswap() {
     const entities = getEntitiesList({ doFilter: false });
     const container = $('#favorites_carousel');
 
-    // Hard limit is required because even if all hotswaps don't fit the screen, their images would still be loaded
-    // 25 is roughly calculated as the maximum number of favs that can fit an ultrawide monitor with the default theme
-    const FAVS_LIMIT = 25;
+    if (!container.length) {
+        return;
+    }
+
+    const FAVS_LIMIT = 999;
     const favs = entities.filter(x => x.item.fav || x.item.fav == 'true').slice(0, FAVS_LIMIT);
 
     //helpful instruction message if no characters are favorited
     if (favs.length == 0) {
+        container.off('.favCarousel');
+        container.children('.inf_clone').remove();
+        container.removeData('favorites-carousel-infinite favorites-carousel-set-width');
+        $('#favorites_carousel_wrapper').removeClass('with-arrows');
+        $('#favorites_carousel_left, #favorites_carousel_right').hide();
         container.html(`<small><span><i class="fa-solid fa-star"></i>&nbsp;${DOMPurify.sanitize(container.attr('no_favs'))}</span></small>`);
         return;
     }
 
     const $carouselEl = $('#favorites_carousel');
-    const prevRatio = favoritesCarouselScrollRatio;
+    const prevRatio = getFavoritesCarouselScrollRatio($carouselEl);
+    favoritesCarouselScrollRatio = prevRatio;
 
     buildAvatarList(container, favs, { interactable: true, highlightFavs: false });
 
-    // Re-attach carousel behaviour
+    const isInfinite = setupFavoritesCarouselInfinite($carouselEl);
     setupFavoritesCarousel();
+
+    if (isInfinite) {
+        $carouselEl.find('img').off('load.restoreScroll error.restoreScroll').on('load.restoreScroll error.restoreScroll', setupFavoritesCarousel);
+        return;
+    }
 
     // Restore scroll position in next tick to account for any image loading/layout
     function restoreScrollPosition() {
@@ -366,11 +379,119 @@ export async function favsToHotswap() {
 }
 
 /**
+ * Gets the logical scroll ratio of the favorites carousel, accounting for loop clones.
+ * @param {JQuery<HTMLElement>} $carousel Carousel element
+ * @returns {number} Logical scroll ratio between 0 and 1
+ */
+function getFavoritesCarouselScrollRatio($carousel) {
+    const isInfinite = Boolean($carousel.data('favorites-carousel-infinite'));
+    const setWidth = Number($carousel.data('favorites-carousel-set-width')) || 0;
+
+    if (isInfinite && setWidth > 0) {
+        const logicalScroll = (($carousel.scrollLeft() - setWidth) % setWidth + setWidth) % setWidth;
+        return logicalScroll / setWidth;
+    }
+
+    const maxScroll = $carousel[0]?.scrollWidth - $carousel.innerWidth();
+
+    if (!Number.isFinite(maxScroll) || maxScroll <= 0) {
+        return favoritesCarouselScrollRatio;
+    }
+
+    return $carousel.scrollLeft() / maxScroll;
+}
+
+/**
+ * Moves the favorites carousel for internal loop positioning without animating the jump.
+ * @param {JQuery<HTMLElement>} $carousel Carousel element
+ * @param {number} scrollLeft Target scroll position
+ */
+function setFavoritesCarouselScrollLeft($carousel, scrollLeft) {
+    const element = $carousel[0];
+
+    if (!element) {
+        return;
+    }
+
+    const previousScrollBehavior = element.style.scrollBehavior;
+    favoritesCarouselRestoring = true;
+    $carousel.stop(true, true);
+    element.style.scrollBehavior = 'auto';
+    element.scrollLeft = scrollLeft;
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            element.style.scrollBehavior = previousScrollBehavior;
+            favoritesCarouselRestoring = false;
+        });
+    });
+}
+
+/**
+ * Duplicates the favorites list on both sides so the scroll position can wrap seamlessly.
+ * @param {JQuery<HTMLElement>} $carousel Carousel element
+ * @returns {boolean} True when infinite wrapping is active
+ */
+function setupFavoritesCarouselInfinite($carousel) {
+    $carousel.off('scroll.favCarouselInfinite');
+    $carousel.children('.inf_clone').remove();
+    $carousel.removeData('favorites-carousel-infinite favorites-carousel-set-width');
+
+    if (!power_user.favorites_carousel_infinite) {
+        return false;
+    }
+
+    const $items = $carousel.children().not('.inf_clone');
+
+    if ($items.length === 0) {
+        return false;
+    }
+
+    let setWidth = 0;
+    $items.each(function () {
+        setWidth += $(this).outerWidth(true);
+    });
+
+    if (setWidth <= $carousel.innerWidth() + 1) {
+        return false;
+    }
+
+    $carousel.prepend($items.clone(false, false).addClass('inf_clone'));
+    $carousel.append($items.clone(false, false).addClass('inf_clone'));
+    $carousel.data('favorites-carousel-infinite', true);
+    $carousel.data('favorites-carousel-set-width', setWidth);
+    setFavoritesCarouselScrollLeft($carousel, setWidth + Math.round(favoritesCarouselScrollRatio * setWidth));
+
+    let ticking = false;
+    $carousel.on('scroll.favCarouselInfinite', () => {
+        if (ticking) {
+            return;
+        }
+
+        ticking = true;
+        requestAnimationFrame(() => {
+            const element = $carousel[0];
+            const left = element.scrollLeft;
+
+            if (left < setWidth * 0.5) {
+                setFavoritesCarouselScrollLeft($carousel, left + setWidth);
+            } else if (left > setWidth * 1.5) {
+                setFavoritesCarouselScrollLeft($carousel, left - setWidth);
+            }
+
+            ticking = false;
+        });
+    });
+
+    return true;
+}
+
+/**
  * Attaches scrolling behaviour & arrow visibility to the favourite characters
  * carousel.  It is idempotent – can be called multiple times safely (old
  * handlers are removed first).
  */
 function setupFavoritesCarousel() {
+    const $wrapper = $('#favorites_carousel_wrapper');
     const $carousel = $('#favorites_carousel');
     const $left = $('#favorites_carousel_left');
     const $right = $('#favorites_carousel_right');
@@ -386,11 +507,17 @@ function setupFavoritesCarousel() {
     }
 
     // Determine scroll step – width of first avatar (with margin) or 100 px (desktop only)
-    const firstItem = $carousel.find('.avatar').first();
+    const firstItem = $carousel.children('.avatar').not('.inf_clone').first();
     const scrollStep = firstItem.length ? firstItem.outerWidth(true) : 100;
+    const isInfinite = Boolean($carousel.data('favorites-carousel-infinite'));
 
     function updateArrowVisibility() {
-        if (mobileEnv) return; // arrows hidden on mobile
+        if (mobileEnv) {
+            $left.hide();
+            $right.hide();
+            $wrapper.removeClass('with-arrows');
+            return; // arrows hidden on mobile
+        }
 
         const contentWidth = $carousel[0].scrollWidth;
         const viewWidth = $carousel.innerWidth();
@@ -401,25 +528,27 @@ function setupFavoritesCarousel() {
         // Always show arrows when overflow, but disable/hide left arrow when at start, right arrow when at end for clarity
         $left.toggle(overflow);
         $right.toggle(overflow);
+        $wrapper.toggleClass('with-arrows', overflow);
 
         // Optionally add disabled state via CSS class when cannot scroll in that direction
-        $left.toggleClass('disabled', $carousel.scrollLeft() <= 0);
-        $right.toggleClass('disabled', $carousel.scrollLeft() >= maxScroll - 1);
+        $left.toggleClass('disabled', !isInfinite && $carousel.scrollLeft() <= 0);
+        $right.toggleClass('disabled', !isInfinite && $carousel.scrollLeft() >= maxScroll - 1);
     }
 
     // Remove previous listeners to avoid stacking
     $left.off('click.favCarousel');
     $right.off('click.favCarousel');
     $(window).off('resize.favCarousel');
+    $carousel.off('scroll.favCarousel scroll.favCarouselSave wheel.favCarousel touchstart.favCarouselTouch touchmove.favCarouselTouch touchend.favCarouselTouch touchcancel.favCarouselTouch click.favCarouselTouch');
 
     $left.on('click.favCarousel', () => {
-        const newPos = Math.max(0, $carousel.scrollLeft() - scrollStep);
+        const newPos = isInfinite ? $carousel.scrollLeft() - scrollStep : Math.max(0, $carousel.scrollLeft() - scrollStep);
         $carousel.animate({ scrollLeft: newPos }, 200, updateArrowVisibility);
     });
 
     $right.on('click.favCarousel', () => {
         const maxScroll = $carousel[0].scrollWidth - $carousel.innerWidth();
-        const newPos = Math.min(maxScroll, $carousel.scrollLeft() + scrollStep);
+        const newPos = isInfinite ? $carousel.scrollLeft() + scrollStep : Math.min(maxScroll, $carousel.scrollLeft() + scrollStep);
         $carousel.animate({ scrollLeft: newPos }, 200, updateArrowVisibility);
     });
 
@@ -429,54 +558,145 @@ function setupFavoritesCarousel() {
     $carousel.on('scroll.favCarouselSave', () => {
         if (favoritesCarouselRestoring) return;
 
-        const maxScroll = $carousel[0].scrollWidth - $carousel.innerWidth();
-        if (maxScroll <= 0) {
-            favoritesCarouselScrollRatio = 0;
-        } else {
-            favoritesCarouselScrollRatio = $carousel.scrollLeft() / maxScroll;
-        }
+        favoritesCarouselScrollRatio = getFavoritesCarouselScrollRatio($carousel);
     });
 
-    /**
-     * Custom wheel handler using requestAnimationFrame batching for smoother
-     * scrolling than the previous per-event updates, while still providing
-     * precise control (and allowing us to hide the scrollbar).
-     */
     $carousel.off('wheel.favCarousel');
 
     if (!mobileEnv) {
-        let wheelAccum = 0;
-        let wheelRafId = null;
-
-        function wheelStep() {
-            const maxScroll = $carousel[0].scrollWidth - $carousel.innerWidth();
-            if (wheelAccum !== 0) {
-                const newPos = Math.min(Math.max(0, $carousel.scrollLeft() + wheelAccum), maxScroll);
-                $carousel.scrollLeft(newPos);
-                wheelAccum = 0;
-                updateArrowVisibility();
-            }
-            wheelRafId = null;
-        }
-
-        $carousel.on('wheel.favCarousel', (e) => {
+        $carousel.on('wheel.favCarousel', function (e) {
             const oe = e.originalEvent;
             const delta = oe.deltaX !== 0 ? oe.deltaX : oe.deltaY;
 
             if (delta === 0) return;
 
             e.preventDefault();
+            const maxScroll = this.scrollWidth - this.clientWidth;
+            this.scrollLeft = isInfinite
+                ? this.scrollLeft + delta
+                : Math.min(Math.max(0, this.scrollLeft + delta), maxScroll);
+            updateArrowVisibility();
+        });
+    } else {
+        let touchStartX = 0;
+        let touchStartScrollLeft = 0;
+        let touchLastX = 0;
+        let touchLastTime = 0;
+        let touchVelocity = 0;
+        let touchMoved = false;
+        let suppressNextClick = false;
+        let touchScrollRafId = null;
+        let touchPendingScrollLeft = 0;
+        let touchMomentumRafId = null;
 
-            wheelAccum += delta;
+        function applyTouchScroll() {
+            $carousel.scrollLeft(touchPendingScrollLeft);
+            updateArrowVisibility();
+            touchScrollRafId = null;
+        }
 
-            if (wheelRafId === null) {
-                wheelRafId = requestAnimationFrame(wheelStep);
+        function stopTouchMomentum() {
+            if (touchMomentumRafId !== null) {
+                cancelAnimationFrame(touchMomentumRafId);
+                touchMomentumRafId = null;
             }
+        }
+
+        function queueTouchScroll(scrollLeft) {
+            touchPendingScrollLeft = scrollLeft;
+
+            if (touchScrollRafId === null) {
+                touchScrollRafId = requestAnimationFrame(applyTouchScroll);
+            }
+        }
+
+        function startTouchMomentum() {
+            let velocity = touchVelocity * 16;
+
+            if (Math.abs(velocity) < 2) {
+                return;
+            }
+
+            function step() {
+                velocity *= 0.92;
+                $carousel.scrollLeft($carousel.scrollLeft() - velocity);
+                updateArrowVisibility();
+
+                if (Math.abs(velocity) < 0.35) {
+                    touchMomentumRafId = null;
+                    return;
+                }
+
+                touchMomentumRafId = requestAnimationFrame(step);
+            }
+
+            touchMomentumRafId = requestAnimationFrame(step);
+        }
+
+        $carousel.on('touchstart.favCarouselTouch', (event) => {
+            const touch = event.originalEvent?.touches?.[0];
+
+            if (!touch) {
+                return;
+            }
+
+            stopTouchMomentum();
+            touchStartX = touch.clientX;
+            touchLastX = touch.clientX;
+            touchLastTime = performance.now();
+            touchVelocity = 0;
+            touchStartScrollLeft = $carousel.scrollLeft();
+            touchMoved = false;
+        });
+
+        $carousel.on('touchmove.favCarouselTouch', (event) => {
+            const touch = event.originalEvent?.touches?.[0];
+
+            if (!touch) {
+                return;
+            }
+
+            const deltaX = touchStartX - touch.clientX;
+            const now = performance.now();
+            const elapsed = now - touchLastTime;
+
+            if (elapsed > 0) {
+                touchVelocity = (touch.clientX - touchLastX) / elapsed;
+                touchLastX = touch.clientX;
+                touchLastTime = now;
+            }
+
+            if (Math.abs(deltaX) < 4 && !touchMoved) {
+                return;
+            }
+
+            touchMoved = true;
+            event.preventDefault();
+            queueTouchScroll(touchStartScrollLeft + deltaX);
+        });
+
+        $carousel.on('touchend.favCarouselTouch touchcancel.favCarouselTouch', () => {
+            if (touchMoved) {
+                suppressNextClick = true;
+                startTouchMomentum();
+                setTimeout(() => {
+                    suppressNextClick = false;
+                }, 0);
+            }
+        });
+
+        $carousel.on('click.favCarouselTouch', '.avatar', (event) => {
+            if (!suppressNextClick) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
         });
     }
 
     // Recheck when avatars finish loading (image dimensions may change width)
-    $carousel.find('img').on('load.favCarousel', updateArrowVisibility);
+    $carousel.find('img').off('load.favCarousel error.favCarousel').on('load.favCarousel error.favCarousel', updateArrowVisibility);
 
     // Initial state
     updateArrowVisibility();
