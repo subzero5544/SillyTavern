@@ -96,6 +96,7 @@ export const METADATA_KEY = 'world_info';
 export const DEFAULT_DEPTH = 4;
 export const DEFAULT_WEIGHT = 100;
 export const MAX_SCAN_DEPTH = 1000;
+const MAX_REPEAT_MATCH_ACTIVATIONS = 10;
 const MAX_COMMENT_LENGTH = 100;
 const KNOWN_DECORATORS = ['@@activate', '@@dont_activate'];
 
@@ -124,6 +125,7 @@ const KNOWN_DECORATORS = ['@@activate', '@@dont_activate'];
  * @property {boolean} [matchCharacterDepthPrompt] If the scan should match against the character depth prompt
  * @property {boolean} [matchScenario] If the scan should match against the character scenario
  * @property {boolean} [matchCreatorNotes] If the scan should match against the creator notes
+ * @property {boolean} [repeatOnMatch] If the entry should activate once per primary keyword match
  * @property {number} [uid] The UID of the entry that triggered the scan
  * @property {string} [world] The world info book of origin of the entry
  * @property {string[]} [key] The primary keys to scan for
@@ -363,6 +365,62 @@ class WorldInfoBuffer {
         }
 
         return false;
+    }
+
+    /**
+     * Counts non-overlapping matches of the given key against the buffer.
+     * @param {string} haystack The string to search in
+     * @param {string} needle The string to search for
+     * @param {WIScanEntry} entry The entry that triggered the scan
+     * @returns {number} Number of matches found in the buffer
+     */
+    countKeyMatches(haystack, needle, entry) {
+        const keyRegex = parseRegexFromString(needle);
+        if (keyRegex) {
+            const flags = Array.from(new Set(`${keyRegex.flags.replace('y', '')}g`)).join('');
+            const regex = new RegExp(keyRegex.source, flags);
+            let count = 0;
+            let match;
+
+            while ((match = regex.exec(haystack)) !== null) {
+                count++;
+                if (match[0] === '') {
+                    regex.lastIndex++;
+                }
+            }
+
+            return count;
+        }
+
+        haystack = this.#transformString(haystack, entry);
+        const transformedString = this.#transformString(needle, entry);
+        const matchWholeWords = entry.matchWholeWords ?? world_info_match_whole_words;
+
+        if (!transformedString) {
+            return 0;
+        }
+
+        if (matchWholeWords) {
+            const keyWords = transformedString.split(/\s+/);
+
+            if (keyWords.length === 1) {
+                const regex = new RegExp(`(?:^|\\W)(${escapeRegex(transformedString)})(?=$|\\W)`, 'g');
+                let count = 0;
+                while (regex.exec(haystack) !== null) {
+                    count++;
+                }
+                return count;
+            }
+        }
+
+        let count = 0;
+        let index = 0;
+        while ((index = haystack.indexOf(transformedString, index)) !== -1) {
+            count++;
+            index += transformedString.length;
+        }
+
+        return count;
     }
 
     /**
@@ -2631,6 +2689,7 @@ export const originalWIDataKeyMap = {
     'matchCharacterDepthPrompt': 'extensions.match_character_depth_prompt',
     'matchScenario': 'extensions.match_scenario',
     'matchCreatorNotes': 'extensions.match_creator_notes',
+    'repeatOnMatch': 'extensions.repeat_on_match',
     'scanDepth': 'extensions.scan_depth',
     'automationId': 'extensions.automation_id',
     'vectorized': 'extensions.vectorized',
@@ -3732,6 +3791,7 @@ export async function getWorldEntry(name, data, entry) {
         handleMatchCheckboxHelper({ template: editTemplate, entry, fieldName: 'matchCharacterDepthPrompt', data, name });
         handleMatchCheckboxHelper({ template: editTemplate, entry, fieldName: 'matchScenario', data, name });
         handleMatchCheckboxHelper({ template: editTemplate, entry, fieldName: 'matchCreatorNotes', data, name });
+        handleMatchCheckboxHelper({ template: editTemplate, entry, fieldName: 'repeatOnMatch', data, name });
 
         // Automation ID
         const automationIdInput = editTemplate.find('input[name="automationId"]');
@@ -4021,6 +4081,7 @@ export const newWorldInfoEntryDefinition = {
     matchCharacterDepthPrompt: { default: false, type: 'boolean' },
     matchScenario: { default: false, type: 'boolean' },
     matchCreatorNotes: { default: false, type: 'boolean' },
+    repeatOnMatch: { default: false, type: 'boolean' },
     delayUntilRecursion: { default: 0, type: 'number' },
     probability: { default: 100, type: 'number' },
     useProbability: { default: true, type: 'boolean' },
@@ -4620,6 +4681,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
     let allActivatedEntries = new Map();
     let failedProbabilityChecks = new Set();
     let allActivatedText = '';
+    let activationCounts = new Map();
 
     let budget = Math.round(world_info_budget * maxContext / 100) || 1;
 
@@ -4799,14 +4861,33 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             const textToScan = buffer.get(entry, scanState);
 
             // PRIMARY KEYWORDS
-            let primaryKeyMatch = entry.key.find(key => {
+            let primaryKeyMatchCount = 0;
+            let primaryKeyMatch = null;
+            for (const key of entry.key) {
                 const substituted = substituteParams(key);
-                return substituted && buffer.matchKeys(textToScan, substituted.trim(), entry);
-            });
+                const trimmed = substituted?.trim();
+                if (!trimmed) {
+                    continue;
+                }
+
+                const matchCount = buffer.countKeyMatches(textToScan, trimmed, entry);
+                if (matchCount > 0) {
+                    primaryKeyMatchCount += matchCount;
+                    primaryKeyMatch ??= key;
+
+                    if (!entry.repeatOnMatch) {
+                        break;
+                    }
+                }
+            }
 
             if (!primaryKeyMatch) {
                 // Don't write logs for simple no-matches
                 continue;
+            }
+
+            if (entry.repeatOnMatch) {
+                activationCounts.set(entry, Math.max(1, Math.min(primaryKeyMatchCount, MAX_REPEAT_MATCH_ACTIVATIONS)));
             }
 
             const hasSecondaryKeywords = (
@@ -4936,8 +5017,22 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             }
 
             // Substitute macros inline, for both this checking and also future processing
-            entry.content = substituteParams(entry.content);
-            newContent += `${entry.content}\n`;
+            const repeatCount = activationCounts.get(entry) ?? 1;
+            const rawContent = entry.content;
+            const activatedCopies = [];
+            let newEntryContent = '';
+
+            for (let i = 0; i < repeatCount; i++) {
+                const activatedEntry = i === 0 ? entry : { ...entry, repeatIndex: i };
+                const content = substituteParams(rawContent);
+                activatedEntry.content = repeatCount > 1
+                    ? `[Repeat match ${i + 1} of ${repeatCount}: apply this copy to matching request #${i + 1}]\n${content}`
+                    : content;
+                activatedCopies.push(activatedEntry);
+                newEntryContent += `${activatedEntry.content}\n`;
+            }
+
+            newContent += newEntryContent;
 
             if (!entry.ignoreBudget && (textToScanTokens + (await getTokenCountAsync(newContent))) >= budget) {
                 if (!token_budget_overflowed) {
@@ -4953,8 +5048,11 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                 continue;
             }
 
-            allActivatedEntries.set(`${entry.world}.${entry.uid}`, entry);
-            console.debug(`[WI] Entry ${entry.uid} activation successful, adding to prompt`, entry);
+            for (let i = 0; i < activatedCopies.length; i++) {
+                const key = i === 0 ? `${entry.world}.${entry.uid}` : `${entry.world}.${entry.uid}#repeat-${i}`;
+                allActivatedEntries.set(key, activatedCopies[i]);
+            }
+            console.debug(`[WI] Entry ${entry.uid} activation successful, adding ${activatedCopies.length} time(s) to prompt`, entry);
         }
 
         const successfulNewEntries = newEntries.filter(x => !failedProbabilityChecks.has(x));
@@ -5394,6 +5492,7 @@ function convertAgnaiMemoryBook(inputObj) {
             delay: null,
             triggers: [],
             ignoreBudget: false,
+            repeatOnMatch: false,
         };
     });
 
@@ -5439,6 +5538,7 @@ function convertRisuLorebook(inputObj) {
             delay: null,
             triggers: [],
             ignoreBudget: false,
+            repeatOnMatch: false,
         };
     });
 
@@ -5489,6 +5589,7 @@ function convertNovelLorebook(inputObj) {
             delay: null,
             triggers: [],
             ignoreBudget: false,
+            repeatOnMatch: false,
         };
     });
 
@@ -5548,6 +5649,7 @@ export function convertCharacterBook(characterBook) {
             extensions: entry.extensions ?? {},
             triggers: entry.extensions?.triggers || [],
             ignoreBudget: entry.extensions?.ignore_budget ?? false,
+            repeatOnMatch: entry.extensions?.repeat_on_match ?? false,
         };
     });
 
