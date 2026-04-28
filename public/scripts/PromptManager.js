@@ -344,6 +344,7 @@ class PromptManager {
                 jailbreak: '',
                 enhanceDefinitions: '',
             },
+            getActivePreset: null,
         };
 
         // Chatcompletion configuration object
@@ -919,27 +920,71 @@ class PromptManager {
     }
 
     /**
+     * Gets the mutable active chat completion preset object, if available.
+     * @returns {object|null}
+     */
+    getActivePresetObject() {
+        if (typeof this.configuration.getActivePreset === 'function') {
+            const preset = this.configuration.getActivePreset();
+            if (preset && typeof preset === 'object') return preset;
+        }
+
+        return this.serviceSettings || null;
+    }
+
+    /**
+     * Gets or creates the Wulf's Hollow extension namespace on an object.
+     * @param {object} target Preset or settings object
+     * @returns {object}
+     */
+    getWulfsHollowExtension(target) {
+        target.extensions = target.extensions && typeof target.extensions === 'object' ? target.extensions : {};
+        target.extensions.wulfs_hollow = target.extensions.wulfs_hollow && typeof target.extensions.wulfs_hollow === 'object'
+            ? target.extensions.wulfs_hollow
+            : {};
+        return target.extensions.wulfs_hollow;
+    }
+
+    /**
      * Gets or creates the WH-local prompt category state for the current preset.
-     * @returns {{categories: {id: string, name: string, order: number, collapsed: boolean}[], assignments: Record<string, string>}}
+     * @returns {{version: number, categories: {id: string, name: string, order: number, collapsed: boolean}[], assignments: Record<string, string>}}
      */
     getPromptCategoryState() {
-        if (!power_user.prompt_categories || typeof power_user.prompt_categories !== 'object') {
-            power_user.prompt_categories = { chat_completion: {} };
+        const activePreset = this.getActivePresetObject();
+        if (!activePreset) {
+            return { version: 1, categories: [], assignments: {} };
         }
 
-        if (!power_user.prompt_categories.chat_completion || typeof power_user.prompt_categories.chat_completion !== 'object') {
-            power_user.prompt_categories.chat_completion = {};
+        const extension = this.getWulfsHollowExtension(activePreset);
+        if (!extension.prompt_categories || typeof extension.prompt_categories !== 'object') {
+            extension.prompt_categories = { version: 1, categories: [], assignments: {} };
         }
 
-        const presetKey = this.getPromptCategoryPresetKey();
-        const chatCompletionState = power_user.prompt_categories.chat_completion;
-        if (!chatCompletionState[presetKey] || typeof chatCompletionState[presetKey] !== 'object') {
-            chatCompletionState[presetKey] = { categories: [], assignments: {} };
-        }
-
-        const state = chatCompletionState[presetKey];
+        const state = extension.prompt_categories;
+        state.version = Number.isFinite(state.version) ? state.version : 1;
         if (!Array.isArray(state.categories)) state.categories = [];
         if (!state.assignments || typeof state.assignments !== 'object') state.assignments = {};
+
+        const stateIsEmpty = () => state.categories.length === 0 && Object.keys(state.assignments).length === 0;
+
+        // Preserve category data from the active settings snapshot if the preset file has not been updated yet.
+        const settingsState = this.serviceSettings && this.serviceSettings !== activePreset
+            ? this.serviceSettings.extensions?.wulfs_hollow?.prompt_categories
+            : null;
+        if (stateIsEmpty() && settingsState && typeof settingsState === 'object') {
+            state.categories = structuredClone(Array.isArray(settingsState.categories) ? settingsState.categories : []);
+            state.assignments = structuredClone(settingsState.assignments && typeof settingsState.assignments === 'object' ? settingsState.assignments : {});
+        }
+
+        // One-time migration from the earlier WH-local user setting storage.
+        const presetKey = this.getPromptCategoryPresetKey();
+        const localState = power_user.prompt_categories?.chat_completion?.[presetKey];
+        if (stateIsEmpty() && localState && typeof localState === 'object') {
+            state.categories = structuredClone(Array.isArray(localState.categories) ? localState.categories : []);
+            state.assignments = structuredClone(localState.assignments && typeof localState.assignments === 'object' ? localState.assignments : {});
+            delete power_user.prompt_categories.chat_completion[presetKey];
+            saveSettingsDebounced();
+        }
 
         state.categories = state.categories
             .filter(category => category && typeof category.id === 'string' && typeof category.name === 'string')
@@ -949,6 +994,11 @@ class PromptManager {
                 order: Number.isFinite(category.order) ? category.order : index,
                 collapsed: Boolean(category.collapsed),
             }));
+
+        if (this.serviceSettings && this.serviceSettings !== activePreset) {
+            const settingsExtension = this.getWulfsHollowExtension(this.serviceSettings);
+            settingsExtension.prompt_categories = state;
+        }
 
         return state;
     }

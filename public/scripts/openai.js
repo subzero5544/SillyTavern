@@ -293,6 +293,26 @@ const sensitiveFields = [
     'workers_ai_account_id',
 ];
 
+const WULFS_HOLLOW_EXTENSION_KEY = 'wulfs_hollow';
+const WULFS_HOLLOW_PROMPT_CATEGORIES_KEY = 'prompt_categories';
+
+function getWulfsHollowPromptCategories(preset) {
+    return preset?.extensions?.[WULFS_HOLLOW_EXTENSION_KEY]?.[WULFS_HOLLOW_PROMPT_CATEGORIES_KEY] || null;
+}
+
+function removeWulfsHollowPromptCategories(preset) {
+    const wulfsHollowExtension = preset?.extensions?.[WULFS_HOLLOW_EXTENSION_KEY];
+    if (!wulfsHollowExtension) return;
+
+    delete wulfsHollowExtension[WULFS_HOLLOW_PROMPT_CATEGORIES_KEY];
+    if (Object.keys(wulfsHollowExtension).length === 0) {
+        delete preset.extensions[WULFS_HOLLOW_EXTENSION_KEY];
+    }
+    if (preset.extensions && Object.keys(preset.extensions).length === 0) {
+        delete preset.extensions;
+    }
+}
+
 /**
  * preset_name -> [selector, setting_name, is_checkbox, is_connection]
  * @type {Record<string, [string, string, boolean, boolean]>}
@@ -697,6 +717,7 @@ function setupChatCompletionPromptManager(openAiSettings) {
             jailbreak: default_jailbreak_prompt,
             enhanceDefinitions: default_enhance_definitions_prompt,
         },
+        getActivePreset: () => openai_settings?.[openai_setting_names?.[oai_settings.preset_settings_openai]],
         promptOrder: {
             strategy: 'global',
             dummyId: 100001,
@@ -4720,6 +4741,31 @@ async function onExportPresetClick() {
             if (isConnection) {
                 delete preset[settingName];
             }
+        }
+    }
+
+    const promptCategories = getWulfsHollowPromptCategories(preset);
+    const hasPromptCategories = promptCategories
+        && (Array.isArray(promptCategories.categories) && promptCategories.categories.length > 0
+            || promptCategories.assignments && Object.keys(promptCategories.assignments).length > 0);
+    if (hasPromptCategories) {
+        const textHeader = 'Export Wulf\'s Hollow prompt categories?';
+        const textMessage = '<div>This preset contains Prompt Manager category data. Keeping it preserves your Wulf\'s Hollow category drawers and ordering metadata, but this extra data is only supported by Wulf\'s Hollow.</div><br><div>Exporting without category data keeps the normal prompt load order, but removes the category drawers from the exported file.</div>';
+        const cancelButton = { text: 'Cancel export', result: POPUP_RESULT.CANCELLED, appendAtEnd: true };
+        const popupOptions = {
+            okButton: 'Export without categories',
+            cancelButton: 'Keep categories',
+            customButtons: [cancelButton],
+        };
+        const popupResult = await Popup.show.confirm(textHeader, textMessage, popupOptions);
+
+        if (popupResult === POPUP_RESULT.CANCELLED) {
+            console.log('Export cancelled by user');
+            return;
+        }
+
+        if (popupResult === POPUP_RESULT.AFFIRMATIVE) {
+            removeWulfsHollowPromptCategories(preset);
         }
     }
 
