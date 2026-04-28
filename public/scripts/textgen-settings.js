@@ -584,6 +584,7 @@ export async function loadTextGenSettings(data, loadedSettings) {
     if (textgenerationwebui_settings.preset) {
         $('#settings_preset_textgenerationwebui').val(textgenerationwebui_settings.preset);
     }
+    $('#settings_preset_textgenerationwebui').trigger('change.select2');
 
     for (const i of setting_names) {
         const value = textgenerationwebui_settings[i];

@@ -42,6 +42,7 @@ import {
 import { download, ensurePlainObject, equalsIgnoreCaseAndAccents, getSanitizedFilename, parseJsonFile, waitUntilCondition } from './utils.js';
 
 const presetManagers = {};
+const searchablePresetSelects = ['#settings_preset_openai', '#settings_preset_textgenerationwebui'];
 
 /**
  * Automatically select a preset for current API based on character or group name.
@@ -106,6 +107,191 @@ function registerPresetManagers() {
             presetManagers[apiId] = new PresetManager($(e), apiId);
         }
     });
+}
+
+/**
+ * Normalizes text for case/accent-insensitive preset searches.
+ * @param {string} value Text value
+ * @returns {string} Normalized value
+ */
+function normalizePresetSelectText(value) {
+    return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+/**
+ * Matches Select2 options by visible text, ignoring case and accents.
+ * @param {object} params Select2 search params
+ * @param {object} data Select2 option data
+ * @returns {object|null} Matching data, or null
+ */
+function presetSelectMatcher(params, data) {
+    const term = normalizePresetSelectText(params.term);
+
+    if (!term) {
+        return data;
+    }
+
+    if (normalizePresetSelectText(data.text).includes(term)) {
+        return data;
+    }
+
+    return null;
+}
+
+/**
+ * Checks whether preset search should keep native selects and use the mobile picker button.
+ * Uses local browser signals to avoid pulling in the larger mobile helpers during preset setup.
+ * @returns {boolean} True when mobile-style preset search should be used
+ */
+function isMobilePresetSearch() {
+    const userAgent = navigator.userAgent || '';
+    const hasTouch = navigator.maxTouchPoints > 0;
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    const smallViewport = window.matchMedia?.('(max-width: 1000px)').matches ?? false;
+
+    return /Android|iPhone|iPad|iPod/i.test(userAgent) || coarsePointer || (hasTouch && smallViewport);
+}
+
+/**
+ * Sets up searchable preset selects using the same Select2 dropdown used by model selectors.
+ */
+function registerPresetSelectSearchControls() {
+    if (isMobilePresetSearch()) {
+        registerMobilePresetSearchControls();
+        return;
+    }
+
+    $(searchablePresetSelects.join(', ')).each((_, element) => {
+        const select = $(element);
+
+        if (select.data('preset-select-search-ready')) {
+            return;
+        }
+
+        select.data('preset-select-search-ready', true);
+        select.select2({
+            placeholder: t`Select a preset`,
+            searchInputPlaceholder: t`Search presets...`,
+            searchInputCssClass: 'text_pole',
+            width: '100%',
+            matcher: presetSelectMatcher,
+        });
+    });
+}
+
+/**
+ * Adds mobile preset search buttons while preserving the native mobile select picker.
+ */
+function registerMobilePresetSearchControls() {
+    $(searchablePresetSelects.join(', ')).each((_, element) => {
+        const select = $(element);
+        const selectId = select.attr('id');
+
+        if (!selectId || select.data('preset-mobile-search-ready')) {
+            return;
+        }
+
+        select.data('preset-mobile-search-ready', true);
+        const button = $('<button></button>', {
+            type: 'button',
+            class: 'menu_button menu_button_icon preset-mobile-search-button marginLeft5',
+            title: t`Search presets`,
+            'aria-label': t`Search presets`,
+            'data-preset-mobile-search-for': selectId,
+        }).append($('<i></i>', { class: 'fa-fw fa-solid fa-magnifying-glass' }));
+        button.on('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openMobilePresetPicker(select);
+        });
+
+        const controls = select.siblings('.flex-container').first();
+        if (controls.length) {
+            controls.prepend(button);
+        } else {
+            select.after(button);
+        }
+    });
+}
+
+/**
+ * Gets the list of preset options for a select.
+ * @param {JQuery<HTMLElement>} select Preset select
+ * @returns {{value: string, text: string, selected: boolean}[]} Preset options
+ */
+function getPresetSelectOptions(select) {
+    return select.find('option').map((_, element) => {
+        const option = /** @type {HTMLOptionElement} */ (element);
+        return {
+            value: option.value,
+            text: option.textContent?.trim() ?? '',
+            selected: option.selected,
+        };
+    }).toArray();
+}
+
+/**
+ * Opens a mobile-friendly searchable preset picker.
+ * @param {JQuery<HTMLElement>} select Preset select
+ */
+function openMobilePresetPicker(select) {
+    if (!select?.length) {
+        return;
+    }
+
+    const wrapper = $('<div></div>', { class: 'preset-mobile-picker' });
+    const search = $('<input>', {
+        type: 'search',
+        class: 'text_pole preset-mobile-picker-search',
+        placeholder: t`Search presets...`,
+    }).attr({
+        autocomplete: 'off',
+        autocapitalize: 'none',
+        spellcheck: 'false',
+    });
+    const results = $('<div></div>', { class: 'preset-mobile-picker-results' });
+    const empty = $('<div></div>', {
+        class: 'preset-mobile-picker-empty',
+        text: t`No matching presets`,
+    });
+    let popup;
+
+    function renderResults() {
+        const query = normalizePresetSelectText(search.val());
+        const matches = getPresetSelectOptions(select).filter(option => normalizePresetSelectText(option.text).includes(query));
+        results.empty();
+
+        if (!matches.length) {
+            results.append(empty);
+            return;
+        }
+
+        for (const option of matches) {
+            const button = $('<button></button>', {
+                type: 'button',
+                class: `menu_button preset-mobile-picker-result${option.selected ? ' active' : ''}`,
+                text: option.text,
+                title: option.text,
+            });
+            button.on('click', async () => {
+                select.val(option.value).trigger('change');
+                await popup?.complete(POPUP_RESULT.AFFIRMATIVE);
+            });
+            results.append(button);
+        }
+    }
+
+    search.on('input', renderResults);
+    wrapper.append(search, results);
+    popup = new Popup(wrapper, POPUP_TYPE.DISPLAY, '', {
+        wide: true,
+        allowVerticalScrolling: true,
+        onOpen: () => {
+            renderResults();
+            search.trigger('focus');
+        },
+    });
+    popup.show();
 }
 
 class PresetManager {
@@ -984,6 +1170,7 @@ async function waitForConnection() {
 export async function initPresetManager() {
     eventSource.on(event_types.CHAT_CHANGED, autoSelectPreset);
     registerPresetManagers();
+    registerPresetSelectSearchControls();
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'preset',
         callback: presetCommandCallback,
@@ -1013,6 +1200,15 @@ export async function initPresetManager() {
         `,
     }));
 
+    $(document).on('click', '[data-preset-mobile-search-for]', function () {
+        const selectId = String($(this).data('preset-mobile-search-for') ?? '');
+        const selectElement = document.getElementById(selectId);
+        const select = $(selectElement);
+
+        if (select.length) {
+            openMobilePresetPicker(select);
+        }
+    });
 
     $(document).on('click', '[data-preset-manager-update]', async function () {
         const apiId = $(this).data('preset-manager-update');

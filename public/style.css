@@ -2759,6 +2759,51 @@ select.text_pole {
     padding-right: 20px;
 }
 
+.preset-mobile-search-button {
+    flex: 0 0 auto;
+    min-width: 32px;
+}
+
+.preset-mobile-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: min(100%, 520px);
+}
+
+.preset-mobile-picker-search {
+    margin: 0;
+}
+
+.preset-mobile-picker-results {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: min(55dvh, 420px);
+    overflow-y: auto;
+}
+
+.preset-mobile-picker-result {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0;
+    min-height: 38px;
+    justify-content: flex-start;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    margin: 0;
+}
+
+.preset-mobile-picker-result.active {
+    background-color: var(--white30a);
+}
+
+.preset-mobile-picker-empty {
+    padding: 8px;
+    opacity: 0.75;
+}
+
 
 .chat_injections_list:empty {
     width: 100%;
