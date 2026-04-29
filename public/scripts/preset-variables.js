@@ -1,200 +1,18 @@
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { escapeHtml } from './utils.js';
 
-export const WULFS_HOLLOW_EXTENSION_KEY = 'wulfs_hollow';
-export const PRESET_VARIABLES_KEY = 'preset_variables';
-export const PRESET_VARIABLES_EXTENSION_PATH = `${WULFS_HOLLOW_EXTENSION_KEY}.${PRESET_VARIABLES_KEY}`;
-
-const PRESET_VARIABLES_VERSION = 1;
 let initialized = false;
 
-/**
- * @typedef {{version: number, variables: Record<string, any>}} PresetVariableState
- */
-
-function getActivePresetManager(apiId = '') {
-    return globalThis.SillyTavern?.getContext?.()?.getPresetManager?.(apiId || '') || null;
+function getActivePresetManager() {
+    return globalThis.SillyTavern?.getContext?.()?.getPresetManager?.('openai') || null;
 }
 
-function getActivePresetName(apiId = '') {
-    return getActivePresetManager(apiId)?.getSelectedPresetName?.() || '';
+function getActivePresetName() {
+    return getActivePresetManager()?.getSelectedPresetName?.() || '';
 }
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/**
- * Normalizes stored preset variable state and supports early direct-object drafts.
- * @param {any} value Stored extension value
- * @returns {PresetVariableState}
- */
-export function normalizePresetVariableState(value) {
-    if (!isPlainObject(value)) {
-        return { version: PRESET_VARIABLES_VERSION, variables: {} };
-    }
-
-    const variables = isPlainObject(value.variables)
-        ? value.variables
-        : Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'version'));
-    return {
-        version: Number.isFinite(value.version) ? value.version : PRESET_VARIABLES_VERSION,
-        variables: Object.fromEntries(Object.entries(variables).filter(([name]) => typeof name === 'string' && name.trim())),
-    };
-}
-
-/**
- * Gets all preset variables for the active preset.
- * @param {string} [apiId] Optional preset manager API id
- * @returns {Record<string, any>}
- */
-export function getPresetVariables(apiId = '') {
-    const manager = getActivePresetManager(apiId);
-    const state = normalizePresetVariableState(manager?.readPresetExtensionField?.({
-        path: PRESET_VARIABLES_EXTENSION_PATH,
-    }));
-    return state.variables;
-}
-
-/**
- * Saves a complete preset variable map to the active preset.
- * @param {Record<string, any>} variables Variable map
- * @param {string} [apiId] Optional preset manager API id
- * @returns {Promise<void>}
- */
-export async function savePresetVariables(variables, apiId = '') {
-    const manager = getActivePresetManager(apiId);
-    if (!manager) {
-        return;
-    }
-
-    const normalizedVariables = {};
-    for (const [name, value] of Object.entries(variables || {})) {
-        const key = String(name || '').trim();
-        if (!key) continue;
-        normalizedVariables[key] = value ?? '';
-    }
-
-    await manager.writePresetExtensionField({
-        path: PRESET_VARIABLES_EXTENSION_PATH,
-        value: {
-            version: PRESET_VARIABLES_VERSION,
-            variables: normalizedVariables,
-        },
-    });
-}
-
-function resolveIndexedValue(value, args = {}) {
-    let resolved = value;
-    if (args.index !== undefined) {
-        try {
-            resolved = JSON.parse(resolved);
-            const numericIndex = Number(args.index);
-            resolved = Number.isNaN(numericIndex) ? resolved[args.index] : resolved[numericIndex];
-            if (typeof resolved === 'object') {
-                resolved = JSON.stringify(resolved);
-            }
-        } catch {
-            // Keep the raw value if it is not JSON-indexable.
-        }
-    }
-
-    return (resolved?.trim?.() === '' || isNaN(Number(resolved))) ? (resolved || '') : Number(resolved);
-}
-
-/**
- * Checks if the active preset defines a variable.
- * @param {string} name Variable name
- * @returns {boolean}
- */
-export function existsPresetVariable(name) {
-    return Object.hasOwn(getPresetVariables(), String(name || '').trim());
-}
-
-/**
- * Gets a preset variable from the active preset.
- * @param {string} name Variable name
- * @param {object} [args] Optional index args
- * @returns {string|number}
- */
-export function getPresetVariable(name, args = {}) {
-    const key = String(args.key ?? name ?? '').trim();
-    const variables = getPresetVariables();
-    return resolveIndexedValue(variables[key], args);
-}
-
-/**
- * Sets a preset variable on the active preset.
- * @param {string} name Variable name
- * @param {any} value Variable value
- * @returns {any}
- */
-export function setPresetVariable(name, value) {
-    const key = String(name || '').trim();
-    if (!key) {
-        throw new Error('Preset variable name cannot be empty or undefined.');
-    }
-
-    const variables = getPresetVariables();
-    variables[key] = value ?? '';
-    void savePresetVariables(variables).catch(error => console.warn('Preset variable could not be saved', error));
-    return value;
-}
-
-/**
- * Deletes a preset variable from the active preset.
- * @param {string} name Variable name
- * @returns {string}
- */
-export function deletePresetVariable(name) {
-    const key = String(name || '').trim();
-    const variables = getPresetVariables();
-    delete variables[key];
-    void savePresetVariables(variables).catch(error => console.warn('Preset variable could not be saved', error));
-    return '';
-}
-
-/**
- * Adds a value to a preset variable, matching local/global variable add semantics.
- * @param {string} name Variable name
- * @param {any} value Value to add
- * @returns {string|number|any[]}
- */
-export function addPresetVariable(name, value) {
-    const currentValue = getPresetVariable(name) || 0;
-    try {
-        const parsedValue = JSON.parse(currentValue);
-        if (Array.isArray(parsedValue)) {
-            parsedValue.push(value);
-            setPresetVariable(name, JSON.stringify(parsedValue));
-            return parsedValue;
-        }
-    } catch {
-        // Ignore non-array values.
-    }
-
-    const increment = Number(value);
-    if (isNaN(increment) || isNaN(Number(currentValue))) {
-        const stringValue = String(currentValue || '') + value;
-        setPresetVariable(name, stringValue);
-        return stringValue;
-    }
-
-    const newValue = Number(currentValue) + increment;
-    if (isNaN(newValue)) {
-        return '';
-    }
-
-    setPresetVariable(name, newValue);
-    return newValue;
-}
-
-export function incrementPresetVariable(name) {
-    return addPresetVariable(name, 1);
-}
-
-export function decrementPresetVariable(name) {
-    return addPresetVariable(name, -1);
 }
 
 function getActivePresetObject() {
@@ -204,7 +22,12 @@ function getActivePresetObject() {
         return null;
     }
 
-    return manager.getPresetSettings?.(name) || manager.getCompletionPresetByName?.(name) || null;
+    const completionPreset = manager.getCompletionPresetByName?.(name);
+    if (completionPreset && isPlainObject(completionPreset)) {
+        return completionPreset;
+    }
+
+    return manager.getPresetSettings?.(name) || null;
 }
 
 function getPromptLabel(prompt) {
@@ -218,7 +41,7 @@ function getPromptSources(preset) {
 }
 
 function makeOccurrenceId() {
-    return `pv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+    return `vi-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 }
 
 function findBalancedMacroEnd(text, start) {
@@ -261,7 +84,8 @@ function findInlineSetOccurrences(text) {
         if (end === -1) break;
 
         const raw = text.slice(start, end);
-        const prefixMatch = raw.match(/^{{\s*(setpresetvar|setvar)\s*::\s*([^}:]+?)\s*::/i);
+        const prefixMatch = raw.match(/^{{\s*(setvar|setglobalvar|addvar|addglobalvar)\s*::\s*([^}:]+?)\s*::/i)
+            || raw.match(/^{{\s*(setvar|setglobalvar|addvar|addglobalvar)\s+([^\s}]+)\s+/i);
         if (prefixMatch) {
             const valueStart = start + prefixMatch[0].length;
             const valueEnd = end - 2;
@@ -282,28 +106,33 @@ function findInlineSetOccurrences(text) {
     return results;
 }
 
+function getVariableScope(type) {
+    return type.includes('global') ? 'global' : 'local';
+}
+
 /**
- * Scans active preset prompts for variable setters and callers.
- * @returns {{variables: Map<string, {name: string, sets: object[], calls: object[]}>, occurrences: Map<string, object>}}
+ * Scans active preset prompts for normal variable setters and callers.
+ * @returns {{variables: Map<string, {name: string, scope: string, sets: object[], calls: object[]}>, occurrences: Map<string, object>}}
  */
-function scanPresetVariableUsage() {
+function scanVariableUsage() {
     const preset = getActivePresetObject();
-    /** @type {Map<string, {name: string, sets: object[], calls: object[]}>} */
+    /** @type {Map<string, {name: string, scope: string, sets: object[], calls: object[]}>} */
     const variables = new Map();
     /** @type {Map<string, object>} */
     const occurrences = new Map();
 
-    const ensureVariable = (name) => {
+    const ensureVariable = (name, scope = 'local') => {
         const key = String(name || '').trim();
         if (!key) return null;
-        if (!variables.has(key)) {
-            variables.set(key, { name: key, sets: [], calls: [] });
+        const mapKey = `${scope}:${key}`;
+        if (!variables.has(mapKey)) {
+            variables.set(mapKey, { name: key, scope, sets: [], calls: [] });
         }
-        return variables.get(key);
+        return variables.get(mapKey);
     };
 
     const addSet = (prompt, occurrence) => {
-        const variable = ensureVariable(occurrence.name);
+        const variable = ensureVariable(occurrence.name, occurrence.scope);
         if (!variable) return;
         occurrence.id = makeOccurrenceId();
         occurrence.prompt = prompt;
@@ -314,7 +143,7 @@ function scanPresetVariableUsage() {
     };
 
     const addCall = (prompt, occurrence) => {
-        const variable = ensureVariable(occurrence.name);
+        const variable = ensureVariable(occurrence.name, occurrence.scope);
         if (!variable) return;
         occurrence.id = makeOccurrenceId();
         occurrence.prompt = prompt;
@@ -326,9 +155,11 @@ function scanPresetVariableUsage() {
 
     for (const prompt of getPromptSources(preset)) {
         const text = prompt.content || '';
-        const scopedSetPattern = /({{\s*([#!?~>\-]*)\s*(setpresetvar|setvar)\s*::\s*([^}]+?)\s*}})([\s\S]*?)({{\s*\/\s*\3\s*}})/gi;
-        const setterNoValuePattern = /{{\s*(incpresetvar|decpresetvar|deletepresetvar|flushpresetvar|incvar|decvar|deletevar|flushvar)\s*::\s*([^}]+?)\s*}}/gi;
-        const callPattern = /{{\s*(getpresetvar|getvar|haspresetvar|hasvar|presetvarexists|varexists)\s*::\s*([^}]+?)\s*}}/gi;
+        const scopedSetPattern = /({{\s*([#!?~>\-]*)\s*(setvar|setglobalvar|addvar|addglobalvar)\s*::\s*([^}]+?)\s*}})([\s\S]*?)({{\s*\/\s*\3\s*}})/gi;
+        const setterNoValuePattern = /{{\s*(incvar|decvar|deletevar|flushvar|incglobalvar|decglobalvar|deleteglobalvar|flushglobalvar)\s*::\s*([^}]+?)\s*}}/gi;
+        const setterNoValueSpacePattern = /{{\s*(incvar|decvar|deletevar|flushvar|incglobalvar|decglobalvar|deleteglobalvar|flushglobalvar)\s+([^}\s]+)\s*}}/gi;
+        const callPattern = /{{\s*(getvar|hasvar|varexists|getglobalvar|hasglobalvar|globalvarexists)\s*::\s*([^}]+?)\s*}}/gi;
+        const callSpacePattern = /{{\s*(getvar|hasvar|varexists|getglobalvar|hasglobalvar|globalvarexists)\s+([^}\s]+)\s*}}/gi;
         const shorthandPattern = /{{\s*\.([a-zA-Z_][\w.-]*)([\s\S]*?)}}/g;
 
         for (const match of text.matchAll(scopedSetPattern)) {
@@ -336,9 +167,11 @@ function scanPresetVariableUsage() {
             const opener = match[1];
             const rawValue = match[5] ?? '';
             const valueStart = fullStart + opener.length;
+            const type = match[3].toLowerCase();
             addSet(prompt, {
-                type: match[3].toLowerCase(),
-                operation: 'set',
+                type,
+                scope: getVariableScope(type),
+                operation: type.startsWith('add') ? 'add' : 'set',
                 name: String(match[4] || '').trim(),
                 value: rawValue,
                 format: 'scoped',
@@ -354,7 +187,8 @@ function scanPresetVariableUsage() {
         for (const occurrence of findInlineSetOccurrences(text)) {
             addSet(prompt, {
                 type: occurrence.type,
-                operation: 'set',
+                scope: getVariableScope(occurrence.type),
+                operation: occurrence.type.startsWith('add') ? 'add' : 'set',
                 name: occurrence.name,
                 value: occurrence.value,
                 format: 'inline',
@@ -367,29 +201,37 @@ function scanPresetVariableUsage() {
             });
         }
 
-        for (const match of text.matchAll(setterNoValuePattern)) {
-            addSet(prompt, {
-                type: match[1].toLowerCase(),
-                operation: match[1].toLowerCase().replace(/(?:preset)?var$/, ''),
-                name: String(match[2] || '').trim(),
-                value: '',
-                format: 'operator',
-                preserveWhitespace: false,
-                editable: false,
-                fullStart: match.index,
-                fullEnd: match.index + match[0].length,
-            });
+        for (const pattern of [setterNoValuePattern, setterNoValueSpacePattern]) {
+            for (const match of text.matchAll(pattern)) {
+                const type = match[1].toLowerCase();
+                addSet(prompt, {
+                    type,
+                    scope: getVariableScope(type),
+                    operation: type.replace(/(?:global)?var$/, ''),
+                    name: String(match[2] || '').trim(),
+                    value: '',
+                    format: 'operator',
+                    preserveWhitespace: false,
+                    editable: false,
+                    fullStart: match.index,
+                    fullEnd: match.index + match[0].length,
+                });
+            }
         }
 
-        for (const match of text.matchAll(callPattern)) {
-            addCall(prompt, {
-                type: match[1].toLowerCase(),
-                operation: 'call',
-                name: String(match[2] || '').trim(),
-                format: 'macro',
-                fullStart: match.index,
-                fullEnd: match.index + match[0].length,
-            });
+        for (const pattern of [callPattern, callSpacePattern]) {
+            for (const match of text.matchAll(pattern)) {
+                const type = match[1].toLowerCase();
+                addCall(prompt, {
+                    type,
+                    scope: getVariableScope(type),
+                    operation: 'call',
+                    name: String(match[2] || '').trim(),
+                    format: 'macro',
+                    fullStart: match.index,
+                    fullEnd: match.index + match[0].length,
+                });
+            }
         }
 
         for (const match of text.matchAll(shorthandPattern)) {
@@ -397,6 +239,7 @@ function scanPresetVariableUsage() {
             const isSetter = /^(?:=|\+=|-=|\+\+|--|\|\|=|\?\?=)/.test(tail);
             const occurrence = {
                 type: 'shorthand',
+                scope: 'local',
                 operation: isSetter ? 'set' : 'call',
                 name: String(match[1] || '').trim(),
                 value: isSetter ? tail : '',
@@ -414,48 +257,6 @@ function scanPresetVariableUsage() {
     }
 
     return { variables, occurrences };
-}
-
-function detectVariableNamesFromPreset() {
-    return [...scanPresetVariableUsage().variables.keys()].sort((a, b) => a.localeCompare(b));
-}
-
-function createPresetVariableRow(name = '', value = '') {
-    const row = $('<div class="preset-variable-row"></div>');
-    const nameInput = $('<input>', {
-        type: 'text',
-        class: 'text_pole preset-variable-name',
-        placeholder: 'name',
-        value: name,
-    });
-    const valueInput = $('<textarea></textarea>', {
-        class: 'text_pole textarea_compact preset-variable-value',
-        placeholder: 'value',
-        rows: 2,
-    }).val(String(value ?? ''));
-    const deleteButton = $('<button></button>', {
-        type: 'button',
-        class: 'menu_button menu_button_icon preset-variable-delete',
-        title: 'Delete variable',
-        'aria-label': 'Delete variable',
-    }).append($('<i class="fa-solid fa-trash-can"></i>'));
-
-    deleteButton.on('click', () => row.remove());
-    row.append(nameInput, valueInput, deleteButton);
-    return row;
-}
-
-function readVariableRows(container) {
-    const variables = {};
-    container.find('.preset-variable-row').each((_, element) => {
-        const row = $(element);
-        const name = String(row.find('.preset-variable-name').val() || '').trim();
-        if (!name) {
-            return;
-        }
-        variables[name] = String(row.find('.preset-variable-value').val() ?? '');
-    });
-    return variables;
 }
 
 function createUsageSourceList(occurrences) {
@@ -484,7 +285,7 @@ function createSetOccurrenceEditor(occurrence) {
         }).val(String(occurrence.value ?? ''));
         row.append(meta, textarea);
 
-        if (occurrence.format === 'inline') {
+        if (occurrence.format === 'inline' && ['setvar', 'setglobalvar'].includes(occurrence.type)) {
             const convertButton = $('<button type="button" class="menu_button preset-variable-convert-scoped"><i class="fa-solid fa-align-left"></i><span>Multiline</span></button>');
             convertButton.on('click', () => {
                 occurrence.convertToScoped = true;
@@ -500,15 +301,15 @@ function createSetOccurrenceEditor(occurrence) {
     return row;
 }
 
-function renderPromptUsageInspector(scan) {
+function renderVariableInspector(scan) {
     const wrapper = $('<div class="preset-variable-usage"></div>');
-    const variables = [...scan.variables.values()].sort((a, b) => a.name.localeCompare(b.name));
-
-    wrapper.append('<h4>Detected in Prompt Manager</h4>');
-    wrapper.append('<div class="preset-variables-note">Shows where variables are set and called in the active Chat Completion preset. Simple set values can be edited here.</div>');
+    const variables = [...scan.variables.values()].sort((a, b) => {
+        const scopeCompare = a.scope.localeCompare(b.scope);
+        return scopeCompare || a.name.localeCompare(b.name);
+    });
 
     if (!variables.length) {
-        wrapper.append('<div class="preset-variable-usage-empty">No variables found in this preset.</div>');
+        wrapper.append('<div class="preset-variable-usage-empty">No variable macros found in this preset.</div>');
         return wrapper;
     }
 
@@ -516,11 +317,11 @@ function renderPromptUsageInspector(scan) {
         const card = $('<div class="preset-variable-usage-card"></div>');
         const header = $('<div class="preset-variable-usage-header"></div>');
         header.append($('<strong></strong>').text(variable.name));
-        header.append($('<span></span>').text(`${variable.sets.length} set / ${variable.calls.length} call`));
+        header.append($('<span></span>').text(`${variable.scope} / ${variable.sets.length} set / ${variable.calls.length} call`));
         card.append(header);
 
         const setBlock = $('<div class="preset-variable-usage-block"></div>');
-        setBlock.append('<div class="preset-variable-usage-label">Set in</div>');
+        setBlock.append('<div class="preset-variable-usage-label">Set or changed in</div>');
         if (variable.sets.length) {
             for (const occurrence of variable.sets) {
                 setBlock.append(createSetOccurrenceEditor(occurrence));
@@ -531,7 +332,7 @@ function renderPromptUsageInspector(scan) {
         card.append(setBlock);
 
         const callBlock = $('<div class="preset-variable-usage-block"></div>');
-        callBlock.append('<div class="preset-variable-usage-label">Called in</div>');
+        callBlock.append('<div class="preset-variable-usage-label">Read or checked in</div>');
         callBlock.append(createUsageSourceList(variable.calls));
         card.append(callBlock);
 
@@ -587,8 +388,7 @@ async function savePromptUsageEdits(rows, occurrences) {
         edits.sort((a, b) => b.fullStart - a.fullStart);
         for (const edit of edits) {
             if (edit.convertToScoped) {
-                const macroName = edit.type === 'setpresetvar' ? 'setpresetvar' : 'setvar';
-                const replacement = `{{#${macroName}::${escapeMacroName(edit.name)}}}\n${edit.nextValue}\n{{/${macroName}}}`;
+                const replacement = `{{#${edit.type}::${escapeMacroName(edit.name)}}}\n${edit.nextValue}\n{{/${edit.type}}}`;
                 content = content.slice(0, edit.fullStart) + replacement + content.slice(edit.fullEnd);
             } else {
                 content = content.slice(0, edit.valueStart) + edit.nextValue + content.slice(edit.valueEnd);
@@ -602,49 +402,20 @@ async function savePromptUsageEdits(rows, occurrences) {
     return true;
 }
 
-async function openPresetVariablesEditor() {
+async function openVariableInspector() {
     const manager = getActivePresetManager();
     const presetName = getActivePresetName();
     if (!manager || !presetName) {
-        toastr.warning('Select a completion preset first.');
+        toastr.warning('Select a Chat Completion preset first.');
         return;
     }
 
-    const variables = getPresetVariables();
-    const scan = scanPresetVariableUsage();
+    const scan = scanVariableUsage();
     const wrapper = $('<div class="preset-variables-editor"></div>');
-    wrapper.append(`<h3>Preset Variables</h3>`);
-    wrapper.append(`<div class="preset-variables-subtitle">Saved to <code>${escapeHtml(presetName)}</code>.</div>`);
-    wrapper.append('<div class="preset-variables-note">Use <code>{{getpresetvar::name}}</code> to read saved preset variables directly. <code>{{getvar::name}}</code> also uses them when no chat variable with that name exists.</div>');
-
-    const rows = $('<div class="preset-variable-rows"></div>');
-    for (const [name, value] of Object.entries(variables).sort(([a], [b]) => a.localeCompare(b))) {
-        rows.append(createPresetVariableRow(name, value));
-    }
-
-    if (!Object.keys(variables).length) {
-        rows.append(createPresetVariableRow());
-    }
-
-    const actions = $('<div class="preset-variable-actions"></div>');
-    const addButton = $('<button type="button" class="menu_button"><i class="fa-solid fa-plus"></i><span>Add variable</span></button>');
-    const detectButton = $('<button type="button" class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Detect from preset</span></button>');
-    addButton.on('click', () => rows.append(createPresetVariableRow()));
-    detectButton.on('click', () => {
-        const current = readVariableRows(rows);
-        const detectedNames = detectVariableNamesFromPreset();
-        let added = 0;
-        for (const name of detectedNames) {
-            if (Object.hasOwn(current, name)) continue;
-            rows.append(createPresetVariableRow(name, ''));
-            current[name] = '';
-            added++;
-        }
-        toastr.info(added ? `Added ${added} detected variable${added === 1 ? '' : 's'}.` : 'No new preset variables found.');
-    });
-    actions.append(addButton, detectButton);
-
-    wrapper.append(actions, rows, renderPromptUsageInspector(scan));
+    wrapper.append('<h3>Variable Inspector</h3>');
+    wrapper.append(`<div class="preset-variables-subtitle">Scanning <code>${escapeHtml(presetName)}</code>.</div>`);
+    wrapper.append('<div class="preset-variables-note">This only scans and edits normal macro text in the active preset. It does not create extra preset variable storage or WH-only variable metadata.</div>');
+    wrapper.append(renderVariableInspector(scan));
 
     const popup = new Popup(wrapper, POPUP_TYPE.TEXT, '', {
         okButton: 'Save',
@@ -658,9 +429,12 @@ async function openPresetVariablesEditor() {
         return;
     }
 
-    await savePresetVariables(readVariableRows(rows));
     const promptEditsSaved = await savePromptUsageEdits(wrapper, scan.occurrences);
-    toastr.success(promptEditsSaved ? 'Preset variables and prompt edits saved.' : 'Preset variables saved.');
+    if (promptEditsSaved) {
+        toastr.success('Prompt variable edits saved.');
+    } else {
+        toastr.info('No prompt variable edits to save.');
+    }
 }
 
 export function initPresetVariables() {
@@ -669,5 +443,5 @@ export function initPresetVariables() {
     }
 
     initialized = true;
-    $(document).on('click', '#manage_preset_variables', openPresetVariablesEditor);
+    $(document).on('click', '#manage_preset_variables', openVariableInspector);
 }

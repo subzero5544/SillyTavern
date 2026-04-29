@@ -295,14 +295,9 @@ const sensitiveFields = [
 
 const WULFS_HOLLOW_EXTENSION_KEY = 'wulfs_hollow';
 const WULFS_HOLLOW_PROMPT_CATEGORIES_KEY = 'prompt_categories';
-const WULFS_HOLLOW_PRESET_VARIABLES_KEY = 'preset_variables';
 
 function getWulfsHollowPromptCategories(preset) {
     return preset?.extensions?.[WULFS_HOLLOW_EXTENSION_KEY]?.[WULFS_HOLLOW_PROMPT_CATEGORIES_KEY] || null;
-}
-
-function getWulfsHollowPresetVariables(preset) {
-    return preset?.extensions?.[WULFS_HOLLOW_EXTENSION_KEY]?.[WULFS_HOLLOW_PRESET_VARIABLES_KEY] || null;
 }
 
 function removeWulfsHollowExtensionField(preset, key) {
@@ -4813,12 +4808,9 @@ async function onExportPresetClick() {
     const hasPromptCategories = promptCategories
         && (Array.isArray(promptCategories.categories) && promptCategories.categories.length > 0
             || promptCategories.assignments && Object.keys(promptCategories.assignments).length > 0);
-    const presetVariables = getWulfsHollowPresetVariables(preset);
-    const presetVariableValues = presetVariables?.variables || presetVariables;
-    const hasPresetVariables = presetVariableValues && typeof presetVariableValues === 'object' && Object.keys(presetVariableValues).length > 0;
-    if (hasPromptCategories || hasPresetVariables) {
+    if (hasPromptCategories) {
         const textHeader = 'Export Wulf\'s Hollow preset data?';
-        const textMessage = '<div>This preset contains Wulf\'s Hollow data such as Prompt Manager categories or preset variables. Keeping it preserves those features, but this extra data is only supported by Wulf\'s Hollow.</div><br><div>Exporting without Wulf\'s Hollow data keeps the normal prompt load order and preset settings, but removes the WH-only category and preset variable metadata from the exported file.</div>';
+        const textMessage = '<div>This preset contains Wulf\'s Hollow Prompt Manager category data. Keeping it preserves categories, but this extra data is only supported by Wulf\'s Hollow.</div><br><div>Exporting without Wulf\'s Hollow data keeps the normal prompt load order and preset settings, but removes the WH-only category metadata from the exported file.</div>';
         const cancelButton = { text: 'Cancel export', result: POPUP_RESULT.CANCELLED, appendAtEnd: true };
         const popupOptions = {
             okButton: 'Export without WH data',
@@ -4834,7 +4826,6 @@ async function onExportPresetClick() {
 
         if (popupResult === POPUP_RESULT.AFFIRMATIVE) {
             removeWulfsHollowExtensionField(preset, WULFS_HOLLOW_PROMPT_CATEGORIES_KEY);
-            removeWulfsHollowExtensionField(preset, WULFS_HOLLOW_PRESET_VARIABLES_KEY);
         }
     }
 

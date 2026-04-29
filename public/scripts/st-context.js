@@ -103,8 +103,7 @@ import { tokenizers, getTextTokens, getTokenCount, getTokenCountAsync, getTokeni
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { timestampToMoment, uuidv4, importFromExternalUrl } from './utils.js';
-import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalOrPresetVariable, incrementGlobalVariable, incrementLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
-import { addPresetVariable, decrementPresetVariable, deletePresetVariable, existsPresetVariable, getPresetVariable, incrementPresetVariable, setPresetVariable } from './preset-variables.js';
+import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
 import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, reloadEditor, saveWorldInfo, updateWorldInfoList, world_names } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
@@ -256,7 +255,7 @@ export function getContext() {
         },
         variables: {
             local: {
-                get: getLocalOrPresetVariable,
+                get: getLocalVariable,
                 set: setLocalVariable,
                 del: deleteLocalVariable,
                 add: addLocalVariable,
@@ -272,15 +271,6 @@ export function getContext() {
                 inc: incrementGlobalVariable,
                 dec: decrementGlobalVariable,
                 has: existsGlobalVariable,
-            },
-            preset: {
-                get: getPresetVariable,
-                set: setPresetVariable,
-                del: deletePresetVariable,
-                add: addPresetVariable,
-                inc: incrementPresetVariable,
-                dec: decrementPresetVariable,
-                has: existsPresetVariable,
             },
         },
         loadWorldInfo,

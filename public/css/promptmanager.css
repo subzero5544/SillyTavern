@@ -227,10 +227,33 @@
     flex-wrap: wrap;
 }
 
-.prompt-manager-category-toolbar-button {
+.prompt-manager-toolbar {
+    justify-content: space-between;
+}
+
+.prompt-manager-toolbar-left,
+.prompt-manager-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.prompt-manager-toolbar-right {
+    margin-left: auto;
+}
+
+.prompt-manager-category-toolbar-button,
+.prompt-manager-preset-variable-button {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 5px;
     min-height: unset !important;
     padding: 3px 8px !important;
     line-height: 1.2 !important;
+}
+
+.prompt-manager-preset-variable-button span {
+    font-size: calc(var(--mainFontSize) * 0.85);
 }
 
 #completion_prompt_manager #completion_prompt_manager_list.prompt-manager-categories-enabled li {

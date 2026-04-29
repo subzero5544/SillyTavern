@@ -1451,7 +1451,7 @@ body.hideAllSwipeButtons :is(.swipe_left, .swipe_right),
 .preset-variables-editor {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     text-align: left;
 }
 
@@ -1464,38 +1464,16 @@ body.hideAllSwipeButtons :is(.swipe_left, .swipe_right),
     opacity: 0.85;
 }
 
-.preset-variable-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.preset-variable-rows {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.preset-variable-row {
-    display: grid;
-    grid-template-columns: minmax(120px, 0.55fr) minmax(180px, 1fr) auto;
-    gap: 8px;
-    align-items: start;
-}
-
-.preset-variable-name,
-.preset-variable-value {
-    width: 100%;
-}
-
-.preset-variable-value {
-    resize: vertical;
+.preset-variable-convert-scoped {
+    min-height: unset !important;
+    padding: 4px 8px !important;
+    line-height: 1.2 !important;
 }
 
 .preset-variable-usage {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     margin-top: 8px;
 }
 
@@ -1506,10 +1484,10 @@ body.hideAllSwipeButtons :is(.swipe_left, .swipe_right),
 .preset-variable-usage-card {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 8px;
-    padding: 10px;
+    padding: 8px;
     background-color: var(--black30a);
 }
 
@@ -1580,14 +1558,6 @@ body.hideAllSwipeButtons :is(.swipe_left, .swipe_right),
 }
 
 @media screen and (max-width: 600px) {
-    .preset-variable-row {
-        grid-template-columns: 1fr auto;
-    }
-
-    .preset-variable-value {
-        grid-column: 1 / -1;
-    }
-
     .preset-variable-set-row {
         grid-template-columns: 1fr;
     }

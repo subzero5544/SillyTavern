@@ -13,16 +13,6 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { isFalseBoolean, convertValueType, isTrueBoolean } from './utils.js';
-import {
-    addPresetVariable,
-    decrementPresetVariable,
-    deletePresetVariable,
-    existsPresetVariable,
-    getPresetVariable,
-    getPresetVariables,
-    incrementPresetVariable,
-    setPresetVariable,
-} from './preset-variables.js';
 
 /** @typedef {import('./slash-commands/SlashCommandParser.js').NamedArguments} NamedArguments */
 /** @typedef {import('./slash-commands/SlashCommand.js').UnnamedArguments} UnnamedArguments */
@@ -53,18 +43,6 @@ export function getLocalVariable(name, args = {}) {
     }
 
     return (localVariable?.trim?.() === '' || isNaN(Number(localVariable))) ? (localVariable || '') : Number(localVariable);
-}
-
-export function getLocalOrPresetVariable(name, args = {}) {
-    if (existsLocalVariable(args.key ?? name)) {
-        return getLocalVariable(name, args);
-    }
-
-    if (existsPresetVariable(args.key ?? name)) {
-        return getPresetVariable(name, args);
-    }
-
-    return '';
 }
 
 export function setLocalVariable(name, value, args = {}) {
@@ -246,10 +224,6 @@ export function resolveVariable(name, scope = null) {
         return getLocalVariable(name);
     }
 
-    if (existsPresetVariable(name)) {
-        return getPresetVariable(name);
-    }
-
     if (existsGlobalVariable(name)) {
         return getGlobalVariable(name);
     }
@@ -272,23 +246,7 @@ export function getVariableMacros() {
         // Replace {{decvar::name}} with empty string and decrement the variable name by 1
         { regex: /{{decvar::([^}]+)}}/gi, replace: (_, name) => decrementLocalVariable(name.trim()) },
         // Replace {{getvar::name}} with the value of the variable name
-        { regex: /{{getvar::([^}]+)}}/gi, replace: (_, name) => getLocalOrPresetVariable(name.trim()) },
-        // Replace {{setpresetvar::name::value}} with empty string and set the active preset variable name to value
-        { regex: /{{setpresetvar::([^:]+)::([^}]*)}}/gi, replace: (_, name, value) => { setPresetVariable(name.trim(), value); return ''; } },
-        // Replace {{addpresetvar::name::value}} with empty string and add value to the active preset variable value
-        { regex: /{{addpresetvar::([^:]+)::([^}]+)}}/gi, replace: (_, name, value) => { addPresetVariable(name.trim(), value); return ''; } },
-        // Replace {{incpresetvar::name}} with the incremented active preset variable
-        { regex: /{{incpresetvar::([^}]+)}}/gi, replace: (_, name) => incrementPresetVariable(name.trim()) },
-        // Replace {{decpresetvar::name}} with the decremented active preset variable
-        { regex: /{{decpresetvar::([^}]+)}}/gi, replace: (_, name) => decrementPresetVariable(name.trim()) },
-        // Replace {{getpresetvar::name}} with the value of the active preset variable name
-        { regex: /{{getpresetvar::([^}]+)}}/gi, replace: (_, name) => getPresetVariable(name.trim()) },
-        // Replace {{haspresetvar::name}} with true if the active preset variable exists
-        { regex: /{{(?:haspresetvar|presetvarexists)::([^}]+)}}/gi, replace: (_, name) => String(existsPresetVariable(name.trim())) },
-        // Replace {{deletepresetvar::name}} with empty string and delete the active preset variable
-        { regex: /{{(?:delete|flush)presetvar::([^}]+)}}/gi, replace: (_, name) => deletePresetVariable(name.trim()) },
-        // Replace {{presetvars}} with all active preset variables as JSON
-        { regex: /{{presetvars}}/gi, replace: () => JSON.stringify(getPresetVariables()) },
+        { regex: /{{getvar::([^}]+)}}/gi, replace: (_, name) => getLocalVariable(name.trim()) },
         // Replace {{setglobalvar::name::value}} with empty string and set the global variable name to value
         { regex: /{{setglobalvar::([^:]+)::([^}]*)}}/gi, replace: (_, name, value) => { setGlobalVariable(name.trim(), value); return ''; } },
         // Replace {{addglobalvar::name::value}} with empty string and add value to the global variable value
@@ -313,22 +271,18 @@ async function listVariablesCallback(args) {
     }
 
     const includeLocalVariables = scope === 'all' || scope === 'local';
-    const includePresetVariables = scope === 'all' || scope === 'preset';
     const includeGlobalVariables = scope === 'all' || scope === 'global';
 
     const localVariables = includeLocalVariables ? Object.entries(chat_metadata.variables).map(([name, value]) => `${name}: ${value}`) : [];
-    const presetVariables = includePresetVariables ? Object.entries(getPresetVariables()).map(([name, value]) => `${name}: ${value}`) : [];
     const globalVariables = includeGlobalVariables ? Object.entries(extension_settings.variables.global).map(([name, value]) => `${name}: ${value}`) : [];
 
     const buildTextValue = (_) => {
         const localVariablesString = localVariables.length > 0 ? localVariables.join('\n\n') : 'No local variables';
-        const presetVariablesString = presetVariables.length > 0 ? presetVariables.join('\n\n') : 'No preset variables';
         const globalVariablesString = globalVariables.length > 0 ? globalVariables.join('\n\n') : 'No global variables';
         const chatName = getCurrentChatId();
 
         const message = [
             includeLocalVariables ? `### Local variables (${chatName}):\n${localVariablesString}` : '',
-            includePresetVariables ? `### Preset variables:\n${presetVariablesString}` : '',
             includeGlobalVariables ? `### Global variables:\n${globalVariablesString}` : '',
         ].filter(x => x).join('\n\n');
         return message;
@@ -336,7 +290,6 @@ async function listVariablesCallback(args) {
 
     const jsonVariables = [
         ...Object.entries(chat_metadata.variables).map(x => ({ key: x[0], value: x[1], scope: 'local' })),
-        ...Object.entries(getPresetVariables()).map(x => ({ key: x[0], value: x[1], scope: 'preset' })),
         ...Object.entries(extension_settings.variables.global).map(x => ({ key: x[0], value: x[1], scope: 'global' })),
     ];
 
@@ -969,7 +922,6 @@ export function registerVariableCommands() {
                 enumList: [
                     new SlashCommandEnumValue('all', 'All variables', enumTypes.enum, enumIcons.variable),
                     new SlashCommandEnumValue('local', 'Local variables', enumTypes.enum, enumIcons.localVariable),
-                    new SlashCommandEnumValue('preset', 'Preset variables', enumTypes.enum, enumIcons.variable),
                     new SlashCommandEnumValue('global', 'Global variables', enumTypes.enum, enumIcons.globalVariable),
                 ],
             }),
@@ -1034,9 +986,9 @@ export function registerVariableCommands() {
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'getvar',
-        callback: (args, value) => String(getLocalOrPresetVariable(value, args)),
+        callback: (args, value) => String(getLocalVariable(value, args)),
         aliases: ['getchatvar'],
-        returns: 'the local variable value, or the active preset variable value if no local variable exists',
+        returns: 'the local variable value',
         namedArgumentList: [
             SlashCommandNamedArgument.fromProps({
                 name: 'key',
@@ -1058,7 +1010,7 @@ export function registerVariableCommands() {
         ],
         helpString: `
             <div>
-                Get a local variable value and pass it down the pipe. If no local variable exists, a variable from the active preset is used. The <code>index</code> argument is optional.
+                Get a local variable value and pass it down the pipe. The <code>index</code> argument is optional.
             </div>
             <div>
                 <strong>Examples:</strong>

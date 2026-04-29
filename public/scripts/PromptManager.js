@@ -1266,17 +1266,27 @@ class PromptManager {
      * @param {HTMLElement} promptManagerDiv Prompt manager root
      */
     renderPromptCategoryToolbar(promptManagerDiv) {
-        if (!this.arePromptCategoriesEnabled()) return;
-
         const listElement = promptManagerDiv.querySelector(`#${this.configuration.prefix}prompt_manager_list`);
         if (!listElement) return;
 
         const toolbar = document.createElement('div');
-        toolbar.classList.add('prompt-manager-category-toolbar');
+        const categoryButtons = this.arePromptCategoriesEnabled() ? `
+            <div class="prompt-manager-toolbar-right">
+                <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="new" title="New category"><i class="fa-solid fa-folder-plus"></i></button>
+                <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="expand" title="Expand all categories"><i class="fa-solid fa-angles-down"></i></button>
+                <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="collapse" title="Collapse all categories"><i class="fa-solid fa-angles-up"></i></button>
+            </div>
+        ` : '';
+
+        toolbar.classList.add('prompt-manager-category-toolbar', 'prompt-manager-toolbar');
         toolbar.innerHTML = `
-            <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="new" title="New category"><i class="fa-solid fa-folder-plus"></i></button>
-            <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="expand" title="Expand all categories"><i class="fa-solid fa-angles-down"></i></button>
-            <button type="button" class="menu_button prompt-manager-category-toolbar-button" data-pm-category-action="collapse" title="Collapse all categories"><i class="fa-solid fa-angles-up"></i></button>
+            <div class="prompt-manager-toolbar-left">
+                <button id="manage_preset_variables" type="button" class="menu_button prompt-manager-preset-variable-button" title="Inspect variable macros used in the active completion preset." data-i18n="[title]Inspect variable macros used in the active completion preset.">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span data-i18n="Variables">Variables</span>
+                </button>
+            </div>
+            ${categoryButtons}
         `;
 
         toolbar.addEventListener('click', async (event) => {
