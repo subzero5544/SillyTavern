@@ -290,6 +290,7 @@ import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
+import { initPresetVariables } from './scripts/preset-variables.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -7942,6 +7943,8 @@ export async function getSettings(initLoaderHandle = null) {
         setWorldInfoSettings(settings.world_info_settings ?? settings, data);
 
         selected_button = settings.selected_button;
+
+        initPresetVariables();
 
         // TODO: Move me into firstLoadInit when experimental toggle is removed
         // power_user.experimental_macro_engine

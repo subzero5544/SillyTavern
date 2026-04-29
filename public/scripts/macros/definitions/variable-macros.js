@@ -1,4 +1,14 @@
 import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
+import {
+    addPresetVariable,
+    decrementPresetVariable,
+    deletePresetVariable,
+    existsPresetVariable,
+    getPresetVariable,
+    getPresetVariables,
+    incrementPresetVariable,
+    setPresetVariable,
+} from '../../preset-variables.js';
 
 /**
  * Registers variable-related {{...}} macros that operate on local and global
@@ -110,9 +120,126 @@ export function registerVariableMacros() {
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
         exampleUsage: ['{{getvar::myvar}}', '{{getvar myintvar}}'],
         handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.local.get(name);
+            const result = ctx.variables.local.has(name) ? ctx.variables.local.get(name) : getPresetVariable(name);
             return normalize(result);
         },
+    });
+
+    MacroRegistry.registerMacro('getpresetvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [
+            {
+                name: 'name',
+                type: MacroValueType.STRING,
+                description: 'The name of the active preset variable to get.',
+            },
+        ],
+        description: 'Gets the value of a variable saved on the active completion preset.',
+        returns: 'The value of the preset variable.',
+        returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
+        exampleUsage: ['{{getpresetvar::tone}}', '{{getpresetvar tone}}'],
+        handler: ({ unnamedArgs: [name], normalize }) => {
+            return normalize(getPresetVariable(name));
+        },
+    });
+
+    MacroRegistry.registerMacro('setpresetvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [
+            {
+                name: 'name',
+                type: MacroValueType.STRING,
+                description: 'The name of the active preset variable to set.',
+            },
+            {
+                name: 'value',
+                type: [MacroValueType.STRING, MacroValueType.NUMBER],
+                description: 'The value to set on the active preset variable.',
+            },
+        ],
+        description: 'Sets a variable on the active completion preset.',
+        returns: '',
+        exampleUsage: ['{{setpresetvar::tone::dry}}'],
+        handler: ({ unnamedArgs: [name, value] }) => {
+            setPresetVariable(name, value);
+            return '';
+        },
+    });
+
+    MacroRegistry.registerMacro('addpresetvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [
+            {
+                name: 'name',
+                type: MacroValueType.STRING,
+                description: 'The name of the active preset variable to add to.',
+            },
+            {
+                name: 'value',
+                type: [MacroValueType.STRING, MacroValueType.NUMBER],
+                description: 'The value to add.',
+            },
+        ],
+        description: 'Adds a value to an active preset variable.',
+        returns: '',
+        exampleUsage: ['{{addpresetvar::counter::1}}'],
+        handler: ({ unnamedArgs: [name, value] }) => {
+            addPresetVariable(name, value);
+            return '';
+        },
+    });
+
+    MacroRegistry.registerMacro('incpresetvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [{ name: 'name', type: MacroValueType.STRING, description: 'The active preset variable to increment.' }],
+        description: 'Increments an active preset variable by 1 and returns the new value.',
+        returns: 'The new preset variable value.',
+        returnType: MacroValueType.NUMBER,
+        exampleUsage: ['{{incpresetvar::counter}}'],
+        handler: ({ unnamedArgs: [name], normalize }) => normalize(incrementPresetVariable(name)),
+    });
+
+    MacroRegistry.registerMacro('decpresetvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [{ name: 'name', type: MacroValueType.STRING, description: 'The active preset variable to decrement.' }],
+        description: 'Decrements an active preset variable by 1 and returns the new value.',
+        returns: 'The new preset variable value.',
+        returnType: MacroValueType.NUMBER,
+        exampleUsage: ['{{decpresetvar::counter}}'],
+        handler: ({ unnamedArgs: [name], normalize }) => normalize(decrementPresetVariable(name)),
+    });
+
+    MacroRegistry.registerMacro('haspresetvar', {
+        aliases: [{ alias: 'presetvarexists' }],
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [{ name: 'name', type: MacroValueType.STRING, description: 'The active preset variable to check.' }],
+        description: 'Checks if an active preset variable exists.',
+        returns: '"true" if the preset variable exists, "false" otherwise.',
+        returnType: MacroValueType.STRING,
+        exampleUsage: ['{{haspresetvar::tone}}'],
+        handler: ({ unnamedArgs: [name] }) => existsPresetVariable(name) ? 'true' : 'false',
+    });
+
+    MacroRegistry.registerMacro('deletepresetvar', {
+        aliases: [{ alias: 'flushpresetvar' }],
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [{ name: 'name', type: MacroValueType.STRING, description: 'The active preset variable to delete.' }],
+        description: 'Deletes an active preset variable.',
+        returns: '',
+        exampleUsage: ['{{deletepresetvar::tone}}'],
+        handler: ({ unnamedArgs: [name] }) => {
+            deletePresetVariable(name);
+            return '';
+        },
+    });
+
+    MacroRegistry.registerMacro('presetvars', {
+        category: MacroCategory.VARIABLE,
+        description: 'Returns the active preset variables as JSON.',
+        returns: 'JSON object of preset variables.',
+        returnType: MacroValueType.STRING,
+        exampleUsage: ['{{presetvars}}'],
+        handler: () => JSON.stringify(getPresetVariables()),
     });
 
     // {{hasvar::name}} -> returns 'true' or 'false'

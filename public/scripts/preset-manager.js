@@ -43,6 +43,27 @@ import { download, ensurePlainObject, equalsIgnoreCaseAndAccents, getSanitizedFi
 
 const presetManagers = {};
 const searchablePresetSelects = ['#settings_preset_openai', '#settings_preset_textgenerationwebui'];
+const WULFS_HOLLOW_EXTENSION_KEY = 'wulfs_hollow';
+const WULFS_HOLLOW_PRESET_VARIABLES_KEY = 'preset_variables';
+
+function getWulfsHollowPresetVariables(preset) {
+    const presetVariables = preset?.extensions?.[WULFS_HOLLOW_EXTENSION_KEY]?.[WULFS_HOLLOW_PRESET_VARIABLES_KEY];
+    const values = presetVariables?.variables || presetVariables;
+    return values && typeof values === 'object' && Object.keys(values).length > 0 ? presetVariables : null;
+}
+
+function removeWulfsHollowExtensionField(preset, key) {
+    const wulfsHollowExtension = preset?.extensions?.[WULFS_HOLLOW_EXTENSION_KEY];
+    if (!wulfsHollowExtension) return;
+
+    delete wulfsHollowExtension[key];
+    if (Object.keys(wulfsHollowExtension).length === 0) {
+        delete preset.extensions[WULFS_HOLLOW_EXTENSION_KEY];
+    }
+    if (preset.extensions && Object.keys(preset.extensions).length === 0) {
+        delete preset.extensions;
+    }
+}
 
 /**
  * Automatically select a preset for current API based on character or group name.
@@ -1282,7 +1303,29 @@ export async function initPresetManager() {
 
         const selected = $(presetManager.select).find('option:selected');
         const name = selected.text();
-        const preset = presetManager.getPresetSettings(name);
+        const preset = structuredClone(presetManager.getPresetSettings(name));
+
+        if (getWulfsHollowPresetVariables(preset)) {
+            const popupResult = await Popup.show.confirm(
+                'Export Wulf\'s Hollow preset variables?',
+                '<div>This preset contains variables saved by Wulf\'s Hollow. Keeping them preserves the preset variable editor data, but this extra data is only supported by Wulf\'s Hollow.</div><br><div>Exporting without preset variables keeps the normal preset settings, but removes the WH-only variable metadata from the exported file.</div>',
+                {
+                    okButton: 'Export without variables',
+                    cancelButton: 'Keep variables',
+                    customButtons: [{ text: 'Cancel export', result: POPUP_RESULT.CANCELLED, appendAtEnd: true }],
+                },
+            );
+
+            if (popupResult === POPUP_RESULT.CANCELLED) {
+                console.log('Export cancelled by user');
+                return;
+            }
+
+            if (popupResult === POPUP_RESULT.AFFIRMATIVE) {
+                removeWulfsHollowExtensionField(preset, WULFS_HOLLOW_PRESET_VARIABLES_KEY);
+            }
+        }
+
         const data = JSON.stringify(preset, null, 4);
         download(data, `${name}.json`, 'application/json');
     });
