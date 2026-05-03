@@ -4891,6 +4891,33 @@ body:is([data-generating="true"], [data-swiping="true"]) :is(
     flex-direction: column;
 }
 
+.start_reply_with_toggles {
+    display: flex;
+    flex-direction: column;
+    row-gap: 2px;
+    align-items: flex-start;
+    min-width: 0;
+    max-width: 100%;
+}
+
+[name="startReplyWithBlock"],
+[name="startReplyWithBlock"] > div {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.start_reply_with_toggles .checkbox_label {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+}
+
+.start_reply_with_toggles small {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
 #shadow_character_popup {
     backdrop-filter: blur(var(--SmartThemeBlurStrength));
     background-color: var(--black70a);

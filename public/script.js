@@ -5757,8 +5757,9 @@ export function getBiasStrings(textareaText, type) {
         }
     }
 
-    promptBias = messageBias || promptBias || power_user.user_prompt_bias || '';
-    const isUserPromptBias = promptBias === power_user.user_prompt_bias;
+    const userPromptBias = power_user.user_prompt_bias_enabled === false ? '' : power_user.user_prompt_bias;
+    promptBias = messageBias || promptBias || userPromptBias || '';
+    const isUserPromptBias = !!userPromptBias && promptBias === userPromptBias;
 
     // Substitute params for everything
     messageBias = substituteParams(messageBias);
@@ -6384,6 +6385,7 @@ export function cleanUpMessage({ getMessage, isImpersonate, isContinue, displayI
     // Add the prompt bias before anything else
     if (
         includeUserPromptBias &&
+        power_user.user_prompt_bias_enabled !== false &&
         power_user.user_prompt_bias &&
         !isImpersonate &&
         !isContinue &&

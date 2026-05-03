@@ -378,13 +378,16 @@ class PresetManager {
             getData: () => {
                 return {
                     value: power_user.user_prompt_bias ?? '',
+                    enabled: power_user.user_prompt_bias_enabled ?? true,
                     show: power_user.show_user_prompt_bias ?? false,
                 };
             },
             setData: (data) => {
                 power_user.user_prompt_bias = data.value ?? '';
+                power_user.user_prompt_bias_enabled = data.enabled ?? true;
                 power_user.show_user_prompt_bias = data.show ?? false;
                 $('#start_reply_with').val(power_user.user_prompt_bias);
+                $('#start_reply_with_enabled').prop('checked', power_user.user_prompt_bias_enabled);
                 $('#chat-show-reply-prefix-checkbox').prop('checked', power_user.show_user_prompt_bias);
                 return saveSettingsDebounced();
             },

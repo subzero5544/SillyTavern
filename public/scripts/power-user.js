@@ -124,6 +124,7 @@ export const power_user = {
     trim_sentences: false,
     always_force_name2: false,
     user_prompt_bias: '',
+    user_prompt_bias_enabled: true,
     show_user_prompt_bias: true,
     auto_continue: {
         enabled: false,
@@ -1730,6 +1731,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#movingUImode').prop('checked', power_user.movingUI);
     $('#noShadowsmode').prop('checked', power_user.noShadows);
     $('#start_reply_with').text(power_user.user_prompt_bias);
+    $('#start_reply_with_enabled').prop('checked', power_user.user_prompt_bias_enabled !== false);
     $('#chat-show-reply-prefix-checkbox').prop('checked', power_user.show_user_prompt_bias);
     $('#auto_continue_enabled').prop('checked', power_user.auto_continue.enabled);
     $('#auto_continue_allow_chat_completions').prop('checked', power_user.auto_continue.allow_chat_completions);
@@ -3322,6 +3324,11 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
+    $('#start_reply_with_enabled').on('change', function () {
+        power_user.user_prompt_bias_enabled = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
     $('#chat-show-reply-prefix-checkbox').on('change', function () {
         power_user.show_user_prompt_bias = !!$(this).prop('checked');
         reloadCurrentChat();
@@ -4516,6 +4523,42 @@ jQuery(() => {
             saveSettingsDebounced();
 
             return power_user.user_prompt_bias;
+        },
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'start-reply-with-state',
+        aliases: ['start-reply-with-toggle'],
+        helpString: `
+            <div>
+                Gets the current "Start Reply With" enabled state. If an argument is provided, it will set the enabled state without changing the saved text.
+            </div>
+            <div>
+                <strong>Examples:</strong>
+            </div>
+            <ul>
+                <li>Enable: <pre><code class="language-stscript">/start-reply-with-state true</code></pre></li>
+                <li>Disable: <pre><code class="language-stscript">/start-reply-with-state false</code></pre></li>
+            </ul>
+        `,
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'enabled state',
+                typeList: [ARGUMENT_TYPE.BOOLEAN],
+                enumList: commonEnumProviders.boolean('trueFalse')(),
+                acceptsMultiple: false,
+                isRequired: false,
+            }),
+        ],
+        callback: (_args, state) => {
+            if (!state || typeof state !== 'string') {
+                return String(power_user.user_prompt_bias_enabled !== false);
+            }
+
+            power_user.user_prompt_bias_enabled = isTrueBoolean(state);
+            $('#start_reply_with_enabled').prop('checked', power_user.user_prompt_bias_enabled);
+            saveSettingsDebounced();
+
+            return String(power_user.user_prompt_bias_enabled);
         },
     }));
 });

@@ -48,6 +48,7 @@ const CC_COMMANDS = [
     'proxy',
     'stop-strings',
     'start-reply-with',
+    'start-reply-with-state',
     'reasoning-template',
     'prompt-post-processing',
     'secret-id',
@@ -67,6 +68,7 @@ const TC_COMMANDS = [
     'tokenizer',
     'stop-strings',
     'start-reply-with',
+    'start-reply-with-state',
     'reasoning-template',
     'secret-id',
     'regex-preset',
@@ -86,6 +88,7 @@ const FANCY_NAMES = {
     'tokenizer': 'Tokenizer',
     'stop-strings': 'Custom Stopping Strings',
     'start-reply-with': 'Start Reply With',
+    'start-reply-with-state': 'Use Start Reply With',
     'reasoning-template': 'Reasoning Template',
     'prompt-post-processing': 'Prompt Post-Processing',
     'secret-id': 'Secret',
@@ -185,6 +188,7 @@ const profilesProvider = () => [
  * @property {string} [tokenizer] Tokenizer
  * @property {string} [stop-strings] Custom Stopping Strings
  * @property {string} [start-reply-with] Start Reply With
+ * @property {string} [start-reply-with-state] Use Start Reply With
  * @property {string} [reasoning-template] Reasoning Template
  * @property {string} [prompt-post-processing] Prompt Post-Processing
  * @property {string} [sysprompt] System Prompt Name
