@@ -1,0 +1,80 @@
+#connection_profile_details_content {
+    margin: 5px 0;
+}
+
+#connection_profile_details_content ul {
+    margin: 0;
+}
+
+#connection_profile_spinner {
+    margin-left: 5px;
+}
+
+.popup:has(.connection-profile-create) {
+    width: min(680px, calc(100dvw - 2em));
+}
+
+.connection-profile-create {
+    text-align: left;
+}
+
+.connection-profile-create h2 {
+    margin: 0 0 10px;
+    text-align: center;
+}
+
+.connection-profile-create h3 {
+    margin: 10px 0 6px;
+}
+
+.connection-profile-create-list {
+    max-height: min(42dvh, 360px);
+    overflow-y: auto;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+}
+
+.connection-profile-create-row.checkbox_label {
+    display: grid;
+    grid-template-columns: auto minmax(145px, 0.55fr) minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    margin: 0;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+.connection-profile-create-row.checkbox_label:last-child {
+    border-bottom: 0;
+}
+
+.connection-profile-create-row input {
+    margin: 0;
+}
+
+.connection-profile-create-name {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.connection-profile-create-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
+}
+
+.connection-profile-create-name-heading {
+    margin-top: 14px;
+}
+
+@media screen and (max-width: 600px) {
+    .connection-profile-create-row.checkbox_label {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .connection-profile-create-value {
+        grid-column: 2;
+    }
+}

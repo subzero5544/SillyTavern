@@ -158,7 +158,7 @@ export const extension_settings = {
     },
     connectionManager: {
         selectedProfile: '',
-        /** @type {import('./extensions/connection-manager/index.js').ConnectionProfile[]} */
+        /** @type {import('./connection-profiles/index.js').ConnectionProfile[]} */
         profiles: [],
     },
     dice: {},

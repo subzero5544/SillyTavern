@@ -1,0 +1,14 @@
+<div class="connection-profile-create">
+    <h2 data-i18n="Creating a Connection Profile">Creating a Connection Profile</h2>
+    <h3 data-i18n="Included settings:">Included settings:</h3>
+    <div class="connection-profile-create-list">
+        {{#each profile}}
+        <label class="checkbox_label connection-profile-create-row" title="{{@key}}: {{this}}">
+            <input type="checkbox" value="{{@key}}" name="exclude" checked>
+            <span class="connection-profile-create-name" data-i18n="{{@key}}">{{@key}}</span>
+            <span class="connection-profile-create-value">{{this}}</span>
+        </label>
+        {{/each}}
+    </div>
+    <h3 class="connection-profile-create-name-heading" data-i18n="Profile name:">Profile name:</h3>
+</div>

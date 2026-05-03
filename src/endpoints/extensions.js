@@ -432,7 +432,7 @@ router.get('/discover', function (request, response) {
     const builtInExtensions = fs
         .readdirSync(PUBLIC_DIRECTORIES.extensions)
         .filter(f => fs.statSync(path.join(PUBLIC_DIRECTORIES.extensions, f)).isDirectory())
-        .filter(f => f !== 'third-party')
+        .filter(f => f !== 'third-party' && f !== 'connection-manager')
         .map(f => ({ type: 'system', name: f }));
 
     // Get all folders in local extensions folder
