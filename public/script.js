@@ -4449,17 +4449,35 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
     logGenerationPerf('core chat filtered');
 
-    const promptRegexScripts = getRegexScripts({ allowedOnly: true });
+    const promptRegexScripts = getRegexScripts({ allowedOnly: true }).filter(script => script.promptOnly);
+    const promptRegexScriptsByPlacement = {
+        [regex_placement.USER_INPUT]: promptRegexScripts.filter(script => Array.isArray(script.placement) && script.placement.includes(regex_placement.USER_INPUT)),
+        [regex_placement.AI_OUTPUT]: promptRegexScripts.filter(script => Array.isArray(script.placement) && script.placement.includes(regex_placement.AI_OUTPUT)),
+        [regex_placement.REASONING]: promptRegexScripts.filter(script => Array.isArray(script.placement) && script.placement.includes(regex_placement.REASONING)),
+    };
     logGenerationPerf('prompt regex scripts loaded');
 
-    coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
+    coreChat = coreChat.map((/** @type {ChatMessage} */ chatItem, index) => {
         let message = chatItem.mes;
         let regexType = chatItem.is_user ? regex_placement.USER_INPUT : regex_placement.AI_OUTPUT;
-        let options = { isPrompt: true, depth: (coreChat.length - index - (isContinue ? 2 : 1)), scripts: promptRegexScripts };
+        let options = {
+            isPrompt: true,
+            depth: (coreChat.length - index - (isContinue ? 2 : 1)),
+            scripts: promptRegexScriptsByPlacement[regexType],
+        };
 
         let regexedMessage = getRegexedString(message, regexType, options);
-        regexedMessage = await appendFileContent(chatItem, regexedMessage);
 
+        return {
+            ...chatItem,
+            mes: regexedMessage,
+            index,
+        };
+    });
+    logGenerationPerf('core chat regex preprocessing');
+
+    coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem) => {
+        let message = await appendFileContent(chatItem, chatItem.mes);
         const titles = [];
         if (chatItem?.extra?.append_title && chatItem?.extra?.title) {
             titles.push(chatItem.extra.title);
@@ -4472,16 +4490,15 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
         }
         if (titles.length > 0) {
-            regexedMessage = `${regexedMessage}\n\n${titles.join('\n\n')}`;
+            message = `${message}\n\n${titles.join('\n\n')}`;
         }
 
         return {
             ...chatItem,
-            mes: regexedMessage,
-            index,
+            mes: message,
         };
     }));
-    logGenerationPerf('core chat regex/file preprocessing');
+    logGenerationPerf('core chat file/title preprocessing');
 
     const promptReasoning = new PromptReasoning();
     for (let i = coreChat.length - 1; i >= 0; i--) {
@@ -4500,7 +4517,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     getRegexedString(
                         String(coreChat[i].extra?.reasoning ?? ''),
                         regex_placement.REASONING,
-                        { isPrompt: true, depth: depth, scripts: promptRegexScripts },
+                        { isPrompt: true, depth: depth, scripts: promptRegexScriptsByPlacement[regex_placement.REASONING] },
                     ),
                     isPrefix,
                     coreChat[i].extra?.reasoning_duration,

@@ -307,6 +307,188 @@ export const REGEX_REPLACE_MODE = {
 };
 
 const regexJavaScriptReplacementCache = new Map();
+const regexLiteralPrefilterCache = new Map();
+
+const REGEX_LITERAL_PREFILTER_MIN_LENGTH = 1;
+
+function getEscapedRegexLiteralCharacter(char) {
+    switch (char) {
+        case 'n':
+            return '\n';
+        case 'r':
+            return '\r';
+        case 't':
+            return '\t';
+        case 'v':
+            return '\v';
+        case 'f':
+            return '\f';
+        default:
+            return 'sSdDwWbBAZpPuUxXc0'.includes(char) ? null : char;
+    }
+}
+
+function hasUnsafeRegexLiteralPrefilterPattern(source) {
+    let escaped = false;
+    let inCharacterClass = false;
+
+    for (let i = 0; i < source.length; i++) {
+        const char = source[i];
+
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+
+        if (char === '\\') {
+            escaped = true;
+            continue;
+        }
+
+        if (char === '[') {
+            inCharacterClass = true;
+            continue;
+        }
+
+        if (char === ']' && inCharacterClass) {
+            inCharacterClass = false;
+            continue;
+        }
+
+        if (inCharacterClass) {
+            continue;
+        }
+
+        if (char === '|') {
+            return true;
+        }
+
+        if (char === '(' && source[i + 1] === '?') {
+            return true;
+        }
+
+        if (char === ')' && ['?', '*'].includes(source[i + 1])) {
+            return true;
+        }
+
+        if (char === ')' && source[i + 1] === '{' && source.slice(i + 2).startsWith('0')) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function getLongestRequiredRegexLiteral(source) {
+    if (hasUnsafeRegexLiteralPrefilterPattern(source)) {
+        return '';
+    }
+
+    const literalRuns = [];
+    let currentRun = '';
+    let escaped = false;
+    let inCharacterClass = false;
+
+    const flushRun = () => {
+        if (currentRun.length > 0) {
+            literalRuns.push(currentRun);
+            currentRun = '';
+        }
+    };
+
+    const removeLastLiteralCharacter = () => {
+        if (currentRun.length > 0) {
+            currentRun = currentRun.slice(0, -1);
+        }
+    };
+
+    for (let i = 0; i < source.length; i++) {
+        const char = source[i];
+
+        if (escaped) {
+            const literalChar = getEscapedRegexLiteralCharacter(char);
+            if (literalChar === null) {
+                flushRun();
+            } else {
+                currentRun += literalChar;
+            }
+            escaped = false;
+            continue;
+        }
+
+        if (char === '\\') {
+            escaped = true;
+            continue;
+        }
+
+        if (char === '[') {
+            flushRun();
+            inCharacterClass = true;
+            continue;
+        }
+
+        if (char === ']' && inCharacterClass) {
+            inCharacterClass = false;
+            continue;
+        }
+
+        if (inCharacterClass) {
+            continue;
+        }
+
+        if (char === '?' || char === '*') {
+            removeLastLiteralCharacter();
+            flushRun();
+            continue;
+        }
+
+        if (char === '{' && source.slice(i + 1).startsWith('0')) {
+            removeLastLiteralCharacter();
+            flushRun();
+            continue;
+        }
+
+        if ('^$.*+{}()'.includes(char)) {
+            flushRun();
+            continue;
+        }
+
+        currentRun += char;
+    }
+
+    flushRun();
+
+    return literalRuns.reduce((longest, literal) => literal.length > longest.length ? literal : longest, '');
+}
+
+function getRegexLiteralPrefilter(regexString, regex) {
+    const cacheKey = `${regexString}\x00${regex.flags}`;
+    if (regexLiteralPrefilterCache.has(cacheKey)) {
+        return regexLiteralPrefilterCache.get(cacheKey);
+    }
+
+    const literal = getLongestRequiredRegexLiteral(regex.source);
+    const ignoreCase = regex.ignoreCase && literal.toLowerCase() !== literal.toUpperCase();
+    const prefilter = literal.length >= REGEX_LITERAL_PREFILTER_MIN_LENGTH
+        ? { literal: ignoreCase ? literal.toLowerCase() : literal, ignoreCase }
+        : null;
+
+    regexLiteralPrefilterCache.set(cacheKey, prefilter);
+    return prefilter;
+}
+
+function canSkipRegexByLiteralPrefilter(regexString, regex, rawString, getLowercaseRawString) {
+    const prefilter = getRegexLiteralPrefilter(regexString, regex);
+    if (!prefilter) {
+        return false;
+    }
+
+    const text = prefilter.ignoreCase
+        ? (typeof getLowercaseRawString === 'function' ? getLowercaseRawString() : rawString.toLowerCase())
+        : rawString;
+
+    return !text.includes(prefilter.literal);
+}
 
 function sanitizeRegexMacro(x) {
     return (x && typeof x === 'string') ?
@@ -351,6 +533,8 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
     }
 
     const allRegex = Array.isArray(scripts) ? scripts : getRegexScripts({ allowedOnly: true });
+    let lowercaseFinalString;
+
     allRegex.forEach((script) => {
         if (!script.placement.includes(placement)) {
             return;
@@ -379,7 +563,15 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
                 }
             }
 
-            finalString = runRegexScript(script, finalString, { characterOverride });
+            const beforeRegex = finalString;
+            finalString = runRegexScript(script, finalString, {
+                characterOverride,
+                getLowercaseRawString: () => lowercaseFinalString ??= finalString.toLowerCase(),
+            });
+
+            if (finalString !== beforeRegex) {
+                lowercaseFinalString = undefined;
+            }
         }
     });
 
@@ -484,9 +676,9 @@ function runRegexJavaScriptReplacement(regexScript, fn, context) {
  * @param {string} rawString The string to run the regex script on
  * @param {RegexScriptParams} params The parameters to use for the regex script
  * @returns {string} The new string
- * @typedef {{characterOverride?: string}} RegexScriptParams The parameters to use for the regex script
+ * @typedef {{characterOverride?: string, getLowercaseRawString?: () => string}} RegexScriptParams The parameters to use for the regex script
  */
-export function runRegexScript(regexScript, rawString, { characterOverride } = {}) {
+export function runRegexScript(regexScript, rawString, { characterOverride, getLowercaseRawString } = {}) {
     let newString = rawString;
     if (!regexScript || !!(regexScript.disabled) || !regexScript?.findRegex || !rawString) {
         return newString;
@@ -510,6 +702,10 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
 
     // The user skill issued. Return with nothing.
     if (!findRegex) {
+        return newString;
+    }
+
+    if (canSkipRegexByLiteralPrefilter(regexString, findRegex, rawString, getLowercaseRawString)) {
         return newString;
     }
 
