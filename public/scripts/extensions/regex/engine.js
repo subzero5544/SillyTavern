@@ -352,6 +352,10 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
 
     const allRegex = Array.isArray(scripts) ? scripts : getRegexScripts({ allowedOnly: true });
     allRegex.forEach((script) => {
+        if (!script.placement.includes(placement)) {
+            return;
+        }
+
         if (
             // Script applies to Markdown and input is Markdown
             (script.markdownOnly && isMarkdown) ||
@@ -361,26 +365,21 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             (!script.markdownOnly && !script.promptOnly && !isMarkdown && !isPrompt)
         ) {
             if (isEdit && !script.runOnEdit) {
-                console.debug(`getRegexedString: Skipping script ${script.scriptName} because it does not run on edit`);
                 return;
             }
 
             // Check if the depth is within the min/max depth
             if (typeof depth === 'number') {
                 if (!isNaN(script.minDepth) && script.minDepth !== null && script.minDepth >= -1 && depth < script.minDepth) {
-                    console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is less than minDepth ${script.minDepth}`);
                     return;
                 }
 
                 if (!isNaN(script.maxDepth) && script.maxDepth !== null && script.maxDepth >= 0 && depth > script.maxDepth) {
-                    console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is greater than maxDepth ${script.maxDepth}`);
                     return;
                 }
             }
 
-            if (script.placement.includes(placement)) {
-                finalString = runRegexScript(script, finalString, { characterOverride });
-            }
+            finalString = runRegexScript(script, finalString, { characterOverride });
         }
     });
 
