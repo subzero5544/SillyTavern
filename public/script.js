@@ -4232,6 +4232,13 @@ function removeLastMessage() {
  */
 export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
+    const generationPerfStarted = performance.now();
+    let generationPerfLast = generationPerfStarted;
+    const logGenerationPerf = (label) => {
+        const now = performance.now();
+        console.info(`[Generate perf] ${label}: +${(now - generationPerfLast).toFixed(1)}ms, total ${(now - generationPerfStarted).toFixed(1)}ms`);
+        generationPerfLast = now;
+    };
     setGenerationProgress(0);
     generation_started = new Date();
 
@@ -4440,8 +4447,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (type === 'swipe') {
         coreChat.pop();
     }
+    logGenerationPerf('core chat filtered');
 
     const promptRegexScripts = getRegexScripts({ allowedOnly: true });
+    logGenerationPerf('prompt regex scripts loaded');
 
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
         let message = chatItem.mes;
@@ -4472,6 +4481,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             index,
         };
     }));
+    logGenerationPerf('core chat regex/file preprocessing');
 
     const promptReasoning = new PromptReasoning();
     for (let i = coreChat.length - 1; i >= 0; i--) {
@@ -4500,6 +4510,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             break;
         }
     }
+    logGenerationPerf('reasoning preprocessing');
 
     // Determine token limit
     let this_max_context = getMaxPromptTokens();
@@ -4507,6 +4518,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (!dryRun) {
         console.debug('Running extension interceptors');
         const aborted = await runGenerationInterceptors(coreChat, this_max_context, type);
+        logGenerationPerf('extension interceptors');
 
         if (aborted) {
             console.debug('Generation aborted by extension interceptors');
@@ -4549,6 +4561,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     console.log(`Core/all messages: ${coreChat.length}/${chat.length}`);
+    logGenerationPerf('pre-WI setup');
 
     if ((promptBias && !isUserPromptBias) || power_user.always_force_name2 || main_api == 'novel') {
         force_name2 = true;
@@ -4579,6 +4592,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     };
     const { worldInfoString, worldInfoBefore, worldInfoAfter, worldInfoExamples, worldInfoDepth, outletEntries } = await getWorldInfoPrompt(chatForWI, this_max_context, dryRun, globalScanData);
     setExtensionPrompt(inject_ids.QUIET_PROMPT, '', extension_prompt_types.IN_PROMPT, 0, true);
+    logGenerationPerf('world info prompt');
 
     // Add message example WI
     for (const example of worldInfoExamples) {
@@ -4689,6 +4703,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (main_api !== 'openai') {
         injectedIndices = await doChatInject(coreChat, isContinue);
     }
+    logGenerationPerf('chat injections');
 
     if (main_api !== 'openai' && power_user.sysprompt.enabled) {
         jailbreak = power_user.prefer_character_jailbreak && jailbreak
@@ -4759,6 +4774,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             userMessageIndices.push(i);
         }
     }
+    logGenerationPerf('history formatting');
 
     let addUserAlignment = isInstruct && power_user.instruct.user_alignment_message;
     let userAlignmentMessage = '';
@@ -4779,6 +4795,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         oaiMessages = setOpenAIMessages(coreChat);
         oaiMessageExamples = setOpenAIMessageExamples(mesExamplesArray);
     }
+    logGenerationPerf('chat completion message formatting');
 
     // hack for regeneration of the first message
     if (chat2.length == 0) {
@@ -4819,6 +4836,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     let arrMes = new Array(chat2.length);
     let tokenCount = await getMessagesTokenCount();
     let lastAddedIndex = 0;
+    logGenerationPerf('initial token count');
 
     // Pre-allocate all injections first.
     // If it doesn't fit - user shot himself in the foot
@@ -4870,6 +4888,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             break;
         }
     }
+    logGenerationPerf('context message selection');
 
     // Add user alignment message if last message is not a user message
     const stoppedAtUser = userMessageIndices.includes(lastAddedIndex);
@@ -4913,6 +4932,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
         }
     }
+    logGenerationPerf('example selection');
 
     let mesSend = [];
     console.debug('calling runGenerate');
@@ -5066,9 +5086,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (generatedPromptCache.length > 0 && main_api !== 'openai') {
         console.debug('---Generated Prompt Cache length: ' + generatedPromptCache.length);
         await checkPromptSize();
+        logGenerationPerf('prompt size check');
     } else {
         console.debug('---calling setPromptString ' + generatedPromptCache.length);
         setPromptString();
+        logGenerationPerf('prompt string set');
     }
 
     // For prompt bit itemization
