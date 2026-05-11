@@ -235,6 +235,11 @@ class WorldInfoBuffer {
     #startDepth = 0;
 
     /**
+     * @type {Map<string, string>} Cache of assembled scan buffers for one WI scan pass.
+     */
+    #scanBufferCache = new Map();
+
+    /**
      * Initialize the buffer with the given messages.
      * @param {string[]} messages Array of messages to add to the buffer
      * @param {WIGlobalScanData} globalScanData Chat independent context to be scanned
@@ -294,6 +299,22 @@ class WorldInfoBuffer {
             depth = MAX_SCAN_DEPTH;
         }
 
+        const cacheKey = [
+            depth,
+            scanState,
+            this.#startDepth,
+            Boolean(entry.matchPersonaDescription),
+            Boolean(entry.matchCharacterDescription),
+            Boolean(entry.matchCharacterPersonality),
+            Boolean(entry.matchCharacterDepthPrompt),
+            Boolean(entry.matchScenario),
+            Boolean(entry.matchCreatorNotes),
+        ].join('|');
+        const cachedBuffer = this.#scanBufferCache.get(cacheKey);
+        if (cachedBuffer !== undefined) {
+            return cachedBuffer;
+        }
+
         const MATCHER = '\x01';
         const JOINER = '\n' + MATCHER;
         let result = MATCHER + this.#depthBuffer.slice(this.#startDepth, depth).join(JOINER);
@@ -326,6 +347,7 @@ class WorldInfoBuffer {
             result += JOINER + this.#recurseBuffer.join(JOINER);
         }
 
+        this.#scanBufferCache.set(cacheKey, result);
         return result;
     }
 
@@ -429,6 +451,7 @@ class WorldInfoBuffer {
      */
     addRecurse(message) {
         this.#recurseBuffer.push(message);
+        this.#scanBufferCache.clear();
     }
 
     /**
@@ -437,6 +460,7 @@ class WorldInfoBuffer {
      */
     addInject(message) {
         this.#injectBuffer.push(message);
+        this.#scanBufferCache.clear();
     }
 
     /**
@@ -452,6 +476,7 @@ class WorldInfoBuffer {
      */
     advanceScan() {
         this.#skew++;
+        this.#scanBufferCache.clear();
     }
 
     /**

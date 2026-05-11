@@ -460,13 +460,23 @@ async function synchronizeChat(batchSize = 5) {
         }
 
         /** @type {HashedMessage[]} */
-        const hashedMessages = context.chat.filter(x => settings.keep_hidden || !x.is_system).map(x => ({ text: String(substituteParams(x.mes)), hash: getStringHash(substituteParams(x.mes)), index: context.chat.indexOf(x) }));
+        const hashedMessages = context.chat
+            .map((message, index) => {
+                if (!settings.keep_hidden && message.is_system) {
+                    return null;
+                }
+
+                const text = String(substituteParams(message.mes));
+                return { text, hash: getStringHash(text), index };
+            })
+            .filter(Boolean);
         const hashesInCollection = await getSavedHashes(chatId);
+        const currentHashes = new Set(hashedMessages.map(x => x.hash));
 
         const newVectorItems = hashedMessages
             .filter(x => !hashesInCollection.includes(x.hash))
             .filter(x => !skippedHashes.has(x.hash));
-        const deletedHashes = hashesInCollection.filter(x => !hashedMessages.some(y => y.hash === x));
+        const deletedHashes = hashesInCollection.filter(x => !currentHashes.has(x));
 
         let batch = newVectorItems.slice(0, batchSize);
 
@@ -818,6 +828,8 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
         // Get the most relevant messages, excluding the last few
         const queryResults = await queryCollection(chatId, queryText, settings.insert);
         const queryHashes = queryResults.hashes.filter(onlyUnique);
+        const queryHashSet = new Set(queryHashes);
+        const queryHashRank = new Map(queryHashes.map((hash, index) => [hash, index]));
         const queriedMessages = [];
         const insertedHashes = new Set();
         const retainMessages = chat.slice(-settings.protect);
@@ -826,8 +838,9 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
             if (retainMessages.includes(message) || !message.mes) {
                 continue;
             }
-            const hash = getStringHash(substituteParams(message.mes));
-            if (queryHashes.includes(hash) && !insertedHashes.has(hash)) {
+            const text = substituteParams(message.mes);
+            const hash = getStringHash(text);
+            if (queryHashSet.has(hash) && !insertedHashes.has(hash)) {
                 queriedMessages.push(message);
                 insertedHashes.add(hash);
             }
@@ -835,12 +848,17 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
 
         // Rearrange queried messages to match query order
         // Order is reversed because more relevant are at the lower indices
-        queriedMessages.sort((a, b) => queryHashes.indexOf(getStringHash(substituteParams(b.mes))) - queryHashes.indexOf(getStringHash(substituteParams(a.mes))));
+        queriedMessages.sort((a, b) => {
+            const hashA = getStringHash(substituteParams(a.mes));
+            const hashB = getStringHash(substituteParams(b.mes));
+            return queryHashRank.get(hashB) - queryHashRank.get(hashA);
+        });
 
         // Remove queried messages from the original chat array
-        for (const message of chat) {
-            if (queriedMessages.includes(message)) {
-                chat.splice(chat.indexOf(message), 1);
+        const queriedMessageSet = new Set(queriedMessages);
+        for (let index = chat.length - 1; index >= 0; index--) {
+            if (queriedMessageSet.has(chat[index])) {
+                chat.splice(index, 1);
             }
         }
 
@@ -905,7 +923,10 @@ async function getQueryText(chat, initiator) {
     };
 
     let hashedMessages = chat
-        .map(x => ({ text: substituteParams(getTextWithoutAttachments(x)), hash: getStringHash(substituteParams(getTextWithoutAttachments(x))), index: chat.indexOf(x) }))
+        .map((message, index) => {
+            const text = substituteParams(getTextWithoutAttachments(message));
+            return { text, hash: getStringHash(text), index };
+        })
         .filter(x => x.text)
         .reverse()
         .slice(0, settings.query);

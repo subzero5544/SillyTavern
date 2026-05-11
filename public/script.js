@@ -222,7 +222,7 @@ import { markdownExclusionExt } from './scripts/showdown-exclusion.js';
 import { markdownUnderscoreExt } from './scripts/showdown-underscore.js';
 import { NOTE_MODULE_NAME, initAuthorsNote, metadata_keys, setFloatingPrompt, shouldWIAddPrompt } from './scripts/authors-note.js';
 import { registerPromptManagerMigration } from './scripts/PromptManager.js';
-import { getRegexedString, regex_placement } from './scripts/extensions/regex/engine.js';
+import { getRegexScripts, getRegexedString, regex_placement } from './scripts/extensions/regex/engine.js';
 import { initLogprobs, saveLogprobsForActiveMessage } from './scripts/logprobs.js';
 import { FILTER_STATES, FILTER_TYPES, FilterHelper, isFilterState } from './scripts/filters.js';
 import { getCfgPrompt, getGuidanceScale, initCfg } from './scripts/cfg-scale.js';
@@ -4441,10 +4441,12 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         coreChat.pop();
     }
 
+    const promptRegexScripts = getRegexScripts({ allowedOnly: true });
+
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
         let message = chatItem.mes;
         let regexType = chatItem.is_user ? regex_placement.USER_INPUT : regex_placement.AI_OUTPUT;
-        let options = { isPrompt: true, depth: (coreChat.length - index - (isContinue ? 2 : 1)) };
+        let options = { isPrompt: true, depth: (coreChat.length - index - (isContinue ? 2 : 1)), scripts: promptRegexScripts };
 
         let regexedMessage = getRegexedString(message, regexType, options);
         regexedMessage = await appendFileContent(chatItem, regexedMessage);
@@ -4488,7 +4490,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     getRegexedString(
                         String(coreChat[i].extra?.reasoning ?? ''),
                         regex_placement.REASONING,
-                        { isPrompt: true, depth: depth },
+                        { isPrompt: true, depth: depth, scripts: promptRegexScripts },
                     ),
                     isPrefix,
                     coreChat[i].extra?.reasoning_duration,

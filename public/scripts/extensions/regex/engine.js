@@ -306,6 +306,8 @@ export const REGEX_REPLACE_MODE = {
     JAVASCRIPT: 'javascript',
 };
 
+const regexJavaScriptReplacementCache = new Map();
+
 function sanitizeRegexMacro(x) {
     return (x && typeof x === 'string') ?
         x.replaceAll(/[\n\r\t\v\f\0.^$*+?{}[\]\\/|()]/gs, function (s) {
@@ -334,9 +336,9 @@ function sanitizeRegexMacro(x) {
  * @param {regex_placement} placement The placement of the string
  * @param {RegexParams} params The parameters to use for the regex script
  * @returns {string} The regexed string
- * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isEdit?: boolean, depth?: number }} RegexParams The parameters to use for the regex script
+ * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isEdit?: boolean, depth?: number, scripts?: RegexScript[] }} RegexParams The parameters to use for the regex script
  */
-export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isEdit, depth } = {}) {
+export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isEdit, depth, scripts } = {}) {
     // WTF have you passed me?
     if (typeof rawString !== 'string') {
         console.warn('getRegexedString: rawString is not a string. Returning empty string.');
@@ -348,7 +350,7 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
         return finalString;
     }
 
-    const allRegex = getRegexScripts({ allowedOnly: true });
+    const allRegex = Array.isArray(scripts) ? scripts : getRegexScripts({ allowedOnly: true });
     allRegex.forEach((script) => {
         if (
             // Script applies to Markdown and input is Markdown
@@ -430,8 +432,13 @@ function getRegexReplacementContext(match, args, regexScript, params) {
 }
 
 function createRegexJavaScriptReplacementFunction(regexScript) {
+    const cacheKey = `${regexScript.id ?? regexScript.scriptName ?? ''}\x00${regexScript.replaceString ?? ''}`;
+    if (regexJavaScriptReplacementCache.has(cacheKey)) {
+        return regexJavaScriptReplacementCache.get(cacheKey);
+    }
+
     try {
-        return new Function(
+        const fn = new Function(
             'match',
             'captures',
             'groups',
@@ -441,8 +448,11 @@ function createRegexJavaScriptReplacementFunction(regexScript) {
             'params',
             '"use strict";\n' + (regexScript.replaceString ?? ''),
         );
+        regexJavaScriptReplacementCache.set(cacheKey, fn);
+        return fn;
     } catch (error) {
         console.warn(`Regex JavaScript replacement failed to compile for script "${regexScript.scriptName || regexScript.id}":`, error);
+        regexJavaScriptReplacementCache.set(cacheKey, null);
         return null;
     }
 }
