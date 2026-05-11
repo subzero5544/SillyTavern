@@ -60,3 +60,9 @@ yarn.lock
 test-results/
 /Marinara-Engine
 /Lumiverse
+.playwright-cli
+/output/playwright
+/Risuai
+/output/
+public/scripts/extensions/wulf-character-effects-old.zip
+/public/scripts/extensions/wulf-character-effects
