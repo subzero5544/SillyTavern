@@ -88,6 +88,12 @@ const API_FIREWORKS = 'https://api.fireworks.ai/inference/v1';
 const API_COMETAPI = 'https://api.cometapi.com/v1';
 const API_ZAI_COMMON = 'https://api.z.ai/api/paas/v4';
 const API_ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4';
+const ZAI_REASONING_EFFORT_MAP = {
+    min: 'minimal',
+    low: 'high',
+    medium: 'high',
+    xhigh: 'max',
+};
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
 const API_MINIMAX = 'https://api.minimax.io/v1';
@@ -2461,6 +2467,9 @@ router.post('/generate', async function (request, response) {
                     type: request.body.include_reasoning ? 'enabled' : 'disabled',
                 },
             };
+            if (request.body.include_reasoning && request.body.reasoning_effort && String(request.body.model).toLowerCase().includes('glm-5.2')) {
+                bodyParams['reasoning_effort'] = ZAI_REASONING_EFFORT_MAP[request.body.reasoning_effort] ?? request.body.reasoning_effort;
+            }
             if (request.body.json_schema) {
                 setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema);
             }

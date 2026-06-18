@@ -66,3 +66,6 @@ test-results/
 /output/
 public/scripts/extensions/wulf-character-effects-old.zip
 /public/scripts/extensions/wulf-character-effects
+/sucker.severian.dev-master
+/tools
+*.zip

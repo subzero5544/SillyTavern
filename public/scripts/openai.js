@@ -2916,6 +2916,7 @@ function getReasoningEffort(settings = null, model = null) {
         chat_completion_sources.ELECTRONHUB,
         chat_completion_sources.CHUTES,
         chat_completion_sources.DEEPSEEK,
+        chat_completion_sources.ZAI,
     ];
 
     if (!reasoningEffortSources.includes(settings.chat_completion_source)) {
@@ -2932,6 +2933,26 @@ function getReasoningEffort(settings = null, model = null) {
                     return reasoning_effort_types.max;
                 default:
                     return reasoning_effort_types.high;
+            }
+        }
+
+        if (settings.chat_completion_source === chat_completion_sources.ZAI) {
+            if (!String(model).toLowerCase().includes('glm-5.2')) {
+                return undefined;
+            }
+
+            switch (settings.reasoning_effort) {
+                case reasoning_effort_types.auto:
+                    return undefined;
+                case reasoning_effort_types.min:
+                    return 'minimal';
+                case reasoning_effort_types.low:
+                case reasoning_effort_types.medium:
+                    return reasoning_effort_types.high;
+                case reasoning_effort_types.xhigh:
+                    return reasoning_effort_types.max;
+                default:
+                    return settings.reasoning_effort;
             }
         }
 
@@ -5550,6 +5571,7 @@ function getZaiMaxContext(model, isUnlocked) {
     }
 
     const contextMap = {
+        'glm-5.2': max_1mil,
         'glm-5.1': max_200k,
         'glm-5-turbo': max_200k,
         'glm-5v-turbo': max_200k,
