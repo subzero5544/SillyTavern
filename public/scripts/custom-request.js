@@ -314,7 +314,7 @@ export class TextCompletionService {
         if (presetName) {
             const presetManager = getPresetManager(this.TYPE);
             if (presetManager) {
-                const preset = presetManager.getCompletionPresetByName(presetName);
+                const preset = await presetManager.getCompletionPresetByNameAsync(presetName);
                 if (preset) {
                     // Convert preset to payload and merge with custom data
                     requestData = this.presetToGeneratePayload(preset, {}, requestData);
@@ -549,7 +549,7 @@ export class ChatCompletionService {
         if (presetName) {
             const presetManager = getPresetManager(this.TYPE);
             if (presetManager) {
-                const preset = presetManager.getCompletionPresetByName(presetName);
+                const preset = await presetManager.getCompletionPresetByNameAsync(presetName);
                 if (preset) {
                     // Convert preset to payload and merge with custom parameters
                     requestData = await this.presetToGeneratePayload(preset, {}, requestData);

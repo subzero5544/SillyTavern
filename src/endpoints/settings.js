@@ -115,6 +115,39 @@ function readPresetsFromDirectory(directoryPath, options = {}) {
     return { fileContents, fileNames };
 }
 
+function readPresetNamesFromDirectory(directoryPath, options = {}) {
+    const {
+        sortFunction,
+        removeFileExtension = false,
+        fileExtension = '.json',
+    } = options;
+
+    const files = fs.readdirSync(directoryPath).sort(sortFunction).filter(x => path.parse(x).ext == fileExtension);
+    return files.map(item => removeFileExtension ? item.replace(/\.[^/.]+$/, '') : item);
+}
+
+function readPresetFileFromDirectory(directoryPath, name, fileExtension = '.json') {
+    if (!name) {
+        return null;
+    }
+
+    const filename = `${name}${fileExtension}`;
+    const fullPath = path.join(directoryPath, filename);
+
+    if (!fs.existsSync(fullPath)) {
+        return null;
+    }
+
+    try {
+        const file = fs.readFileSync(fullPath, 'utf8');
+        JSON.parse(file);
+        return file;
+    } catch {
+        console.warn(`${filename} is not a valid JSON`);
+        return null;
+    }
+}
+
 async function backupSettings() {
     try {
         const userHandles = await getAllUserHandles();
@@ -218,9 +251,11 @@ router.post('/save', function (request, response) {
 // Wintermute's code
 router.post('/get', (request, response) => {
     let settings;
+    let parsedSettings = {};
     try {
         const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
         settings = fs.readFileSync(pathToSettings, 'utf8');
+        parsedSettings = JSON.parse(settings);
     } catch (e) {
         return response.sendStatus(500);
     }
@@ -233,10 +268,16 @@ router.post('/get', (request, response) => {
         });
 
     // OpenAI Settings
-    const { fileContents: openai_settings, fileNames: openai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.openAI_Settings, {
-            sortFunction: sortByName(request.user.directories.openAI_Settings), removeFileExtension: true,
-        });
+    // Only send names at startup. Full preset bodies are fetched on demand via /api/presets/get.
+    const openai_setting_names = readPresetNamesFromDirectory(request.user.directories.openAI_Settings, {
+        sortFunction: sortByName(request.user.directories.openAI_Settings), removeFileExtension: true,
+    });
+    const openai_settings = new Array(openai_setting_names.length).fill(null);
+    const selectedOpenAiPreset = parsedSettings?.oai_settings?.preset_settings_openai ?? parsedSettings?.preset_settings_openai;
+    const selectedOpenAiPresetIndex = openai_setting_names.indexOf(selectedOpenAiPreset);
+    if (selectedOpenAiPresetIndex !== -1) {
+        openai_settings[selectedOpenAiPresetIndex] = readPresetFileFromDirectory(request.user.directories.openAI_Settings, selectedOpenAiPreset);
+    }
 
     // TextGenerationWebUI Settings
     const { fileContents: textgenerationwebui_presets, fileNames: textgenerationwebui_preset_names }

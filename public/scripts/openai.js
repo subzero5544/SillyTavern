@@ -594,6 +594,79 @@ export let selected_custom_endpoint = custom_endpoint_presets[0];
 export let openai_setting_names;
 export let openai_settings;
 
+function normalizeOpenAIPresetCacheEntry(entry) {
+    if (!entry) {
+        return null;
+    }
+
+    if (typeof entry === 'string') {
+        try {
+            return JSON.parse(entry);
+        } catch {
+            return null;
+        }
+    }
+
+    return entry;
+}
+
+function setOpenAIPresetCache(name, preset) {
+    if (!openai_setting_names || !openai_settings || !name) {
+        return;
+    }
+
+    let index = openai_setting_names[name];
+    if (index === undefined) {
+        index = openai_settings.length;
+        openai_setting_names[name] = index;
+        openai_settings.push(null);
+    }
+
+    openai_settings[index] = normalizeOpenAIPresetCacheEntry(preset);
+}
+
+export function getOpenAIPresetByName(name) {
+    if (!openai_setting_names || !openai_settings || !name) {
+        return null;
+    }
+
+    const index = openai_setting_names[name];
+    if (index === undefined) {
+        return null;
+    }
+
+    const preset = normalizeOpenAIPresetCacheEntry(openai_settings[index]);
+    openai_settings[index] = preset;
+    return preset;
+}
+
+export async function getOpenAIPresetByNameAsync(name) {
+    const cachedPreset = getOpenAIPresetByName(name);
+    if (cachedPreset) {
+        return cachedPreset;
+    }
+
+    if (!name) {
+        return null;
+    }
+
+    const response = await fetch('/api/presets/get', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ apiId: 'openai', name }),
+    });
+
+    if (!response.ok) {
+        toastr.error(t`Failed to load preset`);
+        console.error('Failed to load OpenAI preset', name, response);
+        return null;
+    }
+
+    const preset = await response.json();
+    setOpenAIPresetCache(name, preset);
+    return getOpenAIPresetByName(name);
+}
+
 /** @type {import('./PromptManager.js').PromptManager} */
 export let promptManager = null;
 
@@ -756,7 +829,7 @@ function setupChatCompletionPromptManager(openAiSettings) {
             jailbreak: default_jailbreak_prompt,
             enhanceDefinitions: default_enhance_definitions_prompt,
         },
-        getActivePreset: () => openai_settings?.[openai_setting_names?.[oai_settings.preset_settings_openai]],
+        getActivePreset: () => getOpenAIPresetByName(oai_settings.preset_settings_openai) ?? getChatCompletionPreset(oai_settings),
         promptOrder: {
             strategy: 'global',
             dummyId: 100001,
@@ -4631,16 +4704,18 @@ function migrateChatCompletionSettings(settings) {
  * @param {ChatCompletionSettings} settings Saved settings from backend
  */
 function loadOpenAISettings(data, settings) {
-    openai_setting_names = data.openai_setting_names;
-    openai_settings = data.openai_settings;
-    openai_settings.forEach(function (item, i) {
-        openai_settings[i] = JSON.parse(item);
-    });
+    const openaiSettingNames = data.openai_setting_names ?? [];
+    openai_settings = Array.isArray(data.openai_settings)
+        ? data.openai_settings.map(normalizeOpenAIPresetCacheEntry)
+        : [];
 
     $('#settings_preset_openai').empty();
     const settingNames = {};
-    openai_setting_names.forEach(function (item, i) {
+    openaiSettingNames.forEach(function (item, i) {
         settingNames[item] = i;
+        if (openai_settings.length <= i) {
+            openai_settings[i] = null;
+        }
         const option = document.createElement('option');
         option.value = i;
         option.text = item;
@@ -4677,6 +4752,12 @@ function loadOpenAISettings(data, settings) {
                 }
             }
         }
+    }
+
+    if (openai_setting_names[oai_settings.preset_settings_openai] === undefined && openaiSettingNames.length > 0) {
+        oai_settings.preset_settings_openai = openaiSettingNames.includes(default_settings.preset_settings_openai)
+            ? default_settings.preset_settings_openai
+            : openaiSettingNames[0];
     }
 
     $(`#settings_preset_openai option[value="${openai_setting_names[oai_settings.preset_settings_openai]}"]`).prop('selected', true);
@@ -4929,11 +5010,11 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         if (Object.keys(openai_setting_names).includes(data.name)) {
             oai_settings.preset_settings_openai = data.name;
             const value = openai_setting_names[data.name];
-            Object.assign(openai_settings[value], presetBody);
+            openai_settings[value] = structuredClone(presetBody);
             $(`#settings_preset_openai option[value="${value}"]`).prop('selected', true);
             if (triggerUi) $('#settings_preset_openai').trigger('change');
         } else {
-            openai_settings.push(presetBody);
+            openai_settings.push(structuredClone(presetBody));
             openai_setting_names[data.name] = openai_settings.length - 1;
             const option = document.createElement('option');
             option.selected = true;
@@ -5148,11 +5229,11 @@ async function onPresetImportFileChange(e) {
     if (Object.keys(openai_setting_names).includes(data.name)) {
         oai_settings.preset_settings_openai = data.name;
         const value = openai_setting_names[data.name];
-        Object.assign(openai_settings[value], presetBody);
+        openai_settings[value] = structuredClone(presetBody);
         $(`#settings_preset_openai option[value="${value}"]`).prop('selected', true);
         $('#settings_preset_openai').trigger('change');
     } else {
-        openai_settings.push(presetBody);
+        openai_settings.push(structuredClone(presetBody));
         openai_setting_names[data.name] = openai_settings.length - 1;
         const option = document.createElement('option');
         option.selected = true;
@@ -5168,7 +5249,12 @@ async function onExportPresetClick() {
         return;
     }
 
-    const preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
+    const preset = structuredClone(await getOpenAIPresetByNameAsync(oai_settings.preset_settings_openai));
+
+    if (!preset) {
+        toastr.error(t`Failed to load preset`);
+        return;
+    }
 
     const fieldValues = sensitiveFields.filter(field => preset[field]).map(field => `<b>${field}</b>: <code>${preset[field]}</code>`);
     if (fieldValues.length > 0) {
@@ -5293,6 +5379,7 @@ async function onDeletePresetClick() {
     const nameToDelete = oai_settings.preset_settings_openai;
     const value = openai_setting_names[oai_settings.preset_settings_openai];
     $(`#settings_preset_openai option[value="${value}"]`).remove();
+    openai_settings[value] = null;
     delete openai_setting_names[oai_settings.preset_settings_openai];
     oai_settings.preset_settings_openai = null;
 
@@ -5341,13 +5428,22 @@ async function onLogitBiasPresetDeleteClick() {
 }
 
 // Load OpenAI preset settings
-function onSettingsPresetChange() {
+async function onSettingsPresetChange() {
     const presetNameBefore = oai_settings.preset_settings_openai;
 
     const presetName = $('#settings_preset_openai').find(':selected').text();
     oai_settings.preset_settings_openai = presetName;
 
-    const preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
+    const loadedPreset = await getOpenAIPresetByNameAsync(oai_settings.preset_settings_openai);
+    if (!loadedPreset) {
+        toastr.error(t`Failed to load preset`);
+        return;
+    }
+    if ($('#settings_preset_openai').find(':selected').text() !== presetName) {
+        return;
+    }
+
+    const preset = structuredClone(loadedPreset);
 
     migrateChatCompletionSettings(preset);
 

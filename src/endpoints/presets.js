@@ -39,6 +39,35 @@ function getPresetSettingsByAPI(apiId, directories) {
 
 export const router = express.Router();
 
+router.post('/get', function (request, response) {
+    try {
+        const name = sanitize(request.body.name);
+        if (!name) {
+            return response.sendStatus(400);
+        }
+
+        const settings = getPresetSettingsByAPI(request.body.apiId, request.user.directories);
+        const filename = name + settings.extension;
+
+        if (!settings.folder) {
+            return response.sendStatus(400);
+        }
+
+        const fullpath = path.join(settings.folder, filename);
+
+        if (!fs.existsSync(fullpath)) {
+            return response.sendStatus(404);
+        }
+
+        const file = fs.readFileSync(fullpath, 'utf-8');
+        const preset = JSON.parse(file);
+        return response.send(preset);
+    } catch (error) {
+        console.error(error);
+        return response.sendStatus(500);
+    }
+});
+
 router.post('/save', function (request, response) {
     const name = sanitize(request.body.name);
     if (!request.body.preset || !name) {

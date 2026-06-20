@@ -23,7 +23,7 @@ import { t } from './i18n.js';
 import { instruct_presets } from './instruct-mode.js';
 import { kai_settings } from './kai-settings.js';
 import { convertNovelPreset } from './nai-settings.js';
-import { oai_settings, openai_setting_names, openai_settings } from './openai.js';
+import { getOpenAIPresetByName, getOpenAIPresetByNameAsync, oai_settings, openai_setting_names, openai_settings } from './openai.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { context_presets, getContextSettings, power_user } from './power-user.js';
 import { reasoning_templates } from './reasoning.js';
@@ -937,6 +937,14 @@ class PresetManager {
      * @returns {any} Preset object if found, otherwise undefined
      */
     getCompletionPresetByName(name) {
+        if (this.apiId === 'openai') {
+            const preset = getOpenAIPresetByName(name);
+            if (preset === null) {
+                console.debug(`Preset ${name} is not cached`);
+            }
+            return preset;
+        }
+
         // Retrieve a completion preset by name. Return undefined if not found.
         let { presets, preset_names } = this.getPresetList();
         let preset;
@@ -958,6 +966,19 @@ class PresetManager {
 
         // if the preset isn't found, returns undefined
         return preset;
+    }
+
+    /**
+     * Retrieves a completion preset by name, loading it on demand when supported.
+     * @param {string} name Name of the preset to retrieve
+     * @returns {Promise<any>} Preset object if found, otherwise undefined
+     */
+    async getCompletionPresetByNameAsync(name) {
+        if (this.apiId === 'openai') {
+            return await getOpenAIPresetByNameAsync(name);
+        }
+
+        return this.getCompletionPresetByName(name);
     }
 
     /**
@@ -1055,6 +1076,32 @@ class PresetManager {
     }
 
     /**
+     * Reads a preset extension field from the preset, loading it on demand when supported.
+     * @param {object} options
+     * @param {string} [options.name] Name of the preset. If not provided, uses the currently selected preset name.
+     * @param {string} options.path Path to the preset extension field, e.g. 'myextension.data'. If empty, reads the entire extensions object.
+     * @return {Promise<any>} The value of the preset extension field, or null if not found.
+     */
+    async readPresetExtensionFieldAsync({ name, path }) {
+        const { settings } = this.getPresetList();
+        const selectedName = this.getSelectedPresetName();
+        const presetName = name || selectedName;
+
+        if (settings && selectedName === presetName) {
+            const settingsExtensions = ensurePlainObject(settings.extensions || {});
+            return path ? lodash.get(settingsExtensions, path, null) : settingsExtensions;
+        }
+
+        const preset = await this.getCompletionPresetByNameAsync(presetName);
+        if (!preset) {
+            return null;
+        }
+
+        const presetExtensions = ensurePlainObject(preset.extensions || {});
+        return path ? lodash.get(presetExtensions, path, null) : presetExtensions;
+    }
+
+    /**
      * Writes a value to a preset extension field.
      * @param {object} options
      * @param {string} [options.name] Name of the preset. If not provided, uses the currently selected preset name.
@@ -1076,7 +1123,7 @@ class PresetManager {
         }
 
         // Also update the preset by name
-        const preset = this.getCompletionPresetByName(presetName);
+        const preset = await this.getCompletionPresetByNameAsync(presetName);
         if (!preset) {
             return;
         }
@@ -1259,7 +1306,7 @@ export async function initPresetManager() {
         }
 
         await eventSource.emit(event_types.PRESET_RENAMED_BEFORE, { apiId: apiId, oldName: oldName, newName: newName });
-        const extensions = presetManager.readPresetExtensionField({ name: oldName, path: '' });
+        const extensions = await presetManager.readPresetExtensionFieldAsync({ name: oldName, path: '' });
         await presetManager.renamePreset(newName);
         await presetManager.writePresetExtensionField({ name: newName, path: '', value: extensions });
         await eventSource.emit(event_types.PRESET_RENAMED, { apiId: apiId, oldName: oldName, newName: newName });
@@ -1285,7 +1332,7 @@ export async function initPresetManager() {
 
         const selected = $(presetManager.select).find('option:selected');
         const name = selected.text();
-        const preset = structuredClone(presetManager.getPresetSettings(name));
+        const preset = structuredClone(await presetManager.getCompletionPresetByNameAsync(name) ?? presetManager.getPresetSettings(name));
 
         const data = JSON.stringify(preset, null, 4);
         download(data, `${name}.json`, 'application/json');
