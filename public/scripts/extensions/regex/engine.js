@@ -120,7 +120,8 @@ export function getScriptsByType(scriptType, { allowedOnly } = DEFAULT_GET_REGEX
         }
         case SCRIPT_TYPES.PRESET: {
             if (allowedOnly) {
-                const allowedPresetNames = extension_settings?.preset_allowed_regex?.[getCurrentPresetAPI()];
+                const apiId = getCurrentPresetAPI();
+                const allowedPresetNames = apiId ? extension_settings?.preset_allowed_regex?.[apiId] : null;
                 if (!Array.isArray(allowedPresetNames) || !allowedPresetNames.includes(getCurrentPresetName())) {
                     return [];
                 }
