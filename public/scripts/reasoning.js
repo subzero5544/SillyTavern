@@ -559,19 +559,13 @@ export class ReasoningHandler {
         setDatasetProperty(this.messageReasoningDetailsDom, 'state', this.state);
         setDatasetProperty(this.messageReasoningDetailsDom, 'type', this.type);
 
-        // Updating a growing reasoning block with full Markdown + sanitization on every stream frame
-        // is very expensive. While streaming, render it as plain text and do the rich render on finish.
         const reasoning = trimSpaces(this.reasoningDisplayText ?? this.reasoning);
-        if (this.state === ReasoningState.Thinking) {
-            this.messageReasoningContentDom.textContent = reasoning;
-        } else {
-            const displayReasoning = messageFormatting(reasoning, '', false, false, messageId, {}, true);
+        const displayReasoning = messageFormatting(reasoning, '', false, false, messageId, {}, true);
 
-            if (power_user.stream_fade_in) {
-                applyStreamFadeIn(this.messageReasoningContentDom, displayReasoning);
-            } else {
-                this.messageReasoningContentDom.innerHTML = displayReasoning;
-            }
+        if (power_user.stream_fade_in) {
+            applyStreamFadeIn(this.messageReasoningContentDom, displayReasoning);
+        } else {
+            this.messageReasoningContentDom.innerHTML = displayReasoning;
         }
 
         // Update tooltip for hidden reasoning edit
