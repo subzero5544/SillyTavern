@@ -582,7 +582,7 @@ class PresetManager {
      * @returns {any} Selected preset value
      */
     getSelectedPreset() {
-        return $(this.select).find('option:selected').val();
+        return this.select?.selectedOptions?.[0]?.value ?? $(this.select).find('option:selected').val();
     }
 
     /**
@@ -590,7 +590,7 @@ class PresetManager {
      * @returns {string} Selected preset name
      */
     getSelectedPresetName() {
-        return $(this.select).find('option:selected').text();
+        return this.select?.selectedOptions?.[0]?.textContent ?? $(this.select).find('option:selected').text();
     }
 
     /**

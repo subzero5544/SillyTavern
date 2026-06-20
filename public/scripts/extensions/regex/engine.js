@@ -119,8 +119,11 @@ export function getScriptsByType(scriptType, { allowedOnly } = DEFAULT_GET_REGEX
             return Array.isArray(scopedScripts) ? scopedScripts : [];
         }
         case SCRIPT_TYPES.PRESET: {
-            if (allowedOnly && !extension_settings?.preset_allowed_regex?.[getCurrentPresetAPI()]?.includes(getCurrentPresetName())) {
-                return [];
+            if (allowedOnly) {
+                const allowedPresetNames = extension_settings?.preset_allowed_regex?.[getCurrentPresetAPI()];
+                if (!Array.isArray(allowedPresetNames) || !allowedPresetNames.includes(getCurrentPresetName())) {
+                    return [];
+                }
             }
             const presetManager = getPresetManager();
             const presetScripts = presetManager?.readPresetExtensionField({ path: 'regex_scripts' });

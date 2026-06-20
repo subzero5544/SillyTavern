@@ -3567,6 +3567,7 @@ class StreamingProcessor {
      * @param {boolean?} continueOnReasoning If continuing on reasoning
      */
     async #checkDomElements(messageId, continueOnReasoning = null) {
+        const shouldUpdateReasoningDom = this.messageDom === null || this.messageTextDom === null || continueOnReasoning;
         if (this.messageDom === null || this.messageTextDom === null) {
             this.messageDom = document.querySelector(`#chat .mes[mesid="${messageId}"]`);
             this.messageTextDom = this.messageDom?.querySelector('.mes_text');
@@ -3576,7 +3577,9 @@ class StreamingProcessor {
         if (continueOnReasoning) {
             await this.reasoningHandler.process(messageId, false, this.promptReasoning);
         }
-        this.reasoningHandler.updateDom(messageId);
+        if (shouldUpdateReasoningDom) {
+            this.reasoningHandler.updateDom(messageId);
+        }
     }
 
     #updateMessageBlockVisibility() {
@@ -3688,20 +3691,22 @@ class StreamingProcessor {
                 };
             }
 
-            const formattedText = messageFormatting(
-                processedText,
-                chat[messageId].name,
-                chat[messageId].is_system,
-                chat[messageId].is_user,
-                messageId,
-                {},
-                false,
-            );
-            if (this.messageTextDom instanceof HTMLElement) {
-                if (power_user.stream_fade_in) {
-                    applyStreamFadeIn(this.messageTextDom, formattedText);
-                } else {
-                    this.messageTextDom.innerHTML = formattedText;
+            if (mesChanged || isFinal) {
+                const formattedText = messageFormatting(
+                    processedText,
+                    chat[messageId].name,
+                    chat[messageId].is_system,
+                    chat[messageId].is_user,
+                    messageId,
+                    {},
+                    false,
+                );
+                if (this.messageTextDom instanceof HTMLElement) {
+                    if (power_user.stream_fade_in) {
+                        applyStreamFadeIn(this.messageTextDom, formattedText);
+                    } else {
+                        this.messageTextDom.innerHTML = formattedText;
+                    }
                 }
             }
 
@@ -3711,7 +3716,9 @@ class StreamingProcessor {
                 this.messageTimerDom.title = timePassed.timerTitle;
             }
 
-            this.setFirstSwipe(messageId);
+            if (mesChanged || isFinal) {
+                this.setFirstSwipe(messageId);
+            }
         }
 
         if (!scrollLock) {
@@ -3865,7 +3872,7 @@ class StreamingProcessor {
                     this.messageLogprobs.push(...(Array.isArray(logprobs) ? logprobs : [logprobs]));
                 }
                 // Get the updated reasoning string into the handler
-                this.reasoningHandler.updateReasoning(this.messageId, state?.reasoning);
+                this.reasoningHandler.updateReasoning(this.messageId, state?.reasoning, { applyRegex: false });
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);

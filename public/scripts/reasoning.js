@@ -389,15 +389,17 @@ export class ReasoningHandler {
      * @param {Object} [options={}] - Optional arguments
      * @param {boolean} [options.persist=false] - Whether to persist the reasoning to the message object
      * @param {boolean} [options.allowReset=false] - Whether to allow empty reasoning provided to reset the reasoning, instead of just taking the existing one
+     * @param {boolean} [options.applyRegex=true] - Whether to apply reasoning regex scripts immediately
      * @returns {boolean} - Returns true if the reasoning was changed, otherwise false
      */
-    updateReasoning(messageId, reasoning = null, { persist = false, allowReset = false } = {}) {
+    updateReasoning(messageId, reasoning = null, { persist = false, allowReset = false, applyRegex = true } = {}) {
         if (messageId == -1 || !chat[messageId]) {
             return false;
         }
 
         reasoning = allowReset ? reasoning ?? this.reasoning : reasoning || this.reasoning;
         reasoning = trimSpaces(reasoning);
+        const nextReasoning = applyRegex ? getRegexedString(reasoning ?? '', regex_placement.REASONING) : reasoning;
 
         // Ensure the chat extra exists
         if (!chat[messageId].extra) {
@@ -405,8 +407,8 @@ export class ReasoningHandler {
         }
         const extra = chat[messageId].extra;
 
-        const reasoningChanged = extra.reasoning !== reasoning;
-        this.reasoning = getRegexedString(reasoning ?? '', regex_placement.REASONING);
+        const reasoningChanged = extra.reasoning !== nextReasoning;
+        this.reasoning = nextReasoning;
 
         this.type = (this.#isParsingReasoning || this.#parsingReasoningMesStartIndex) ? ReasoningType.Parsed : ReasoningType.Model;
 
@@ -437,8 +439,10 @@ export class ReasoningHandler {
         if (!this.reasoning && !this.#isHiddenReasoningModel)
             return;
 
+        const previousState = this.state;
+
         // Ensure reasoning string is updated and regexes are applied correctly
-        const reasoningChanged = this.updateReasoning(messageId, null, { persist: true });
+        const reasoningChanged = this.updateReasoning(messageId, null, { persist: true, applyRegex: false });
 
         if ((this.#isHiddenReasoningModel || reasoningChanged) && this.state === ReasoningState.None) {
             this.state = ReasoningState.Thinking;
@@ -447,6 +451,11 @@ export class ReasoningHandler {
         if ((this.#isHiddenReasoningModel || !reasoningChanged) && mesChanged && this.state === ReasoningState.Thinking) {
             this.endTime = new Date();
             await this.finish(messageId);
+            return;
+        }
+
+        if (reasoningChanged || previousState !== this.state) {
+            this.updateDom(messageId);
         }
     }
 
@@ -550,14 +559,19 @@ export class ReasoningHandler {
         setDatasetProperty(this.messageReasoningDetailsDom, 'state', this.state);
         setDatasetProperty(this.messageReasoningDetailsDom, 'type', this.type);
 
-        // Update the reasoning message
+        // Updating a growing reasoning block with full Markdown + sanitization on every stream frame
+        // is very expensive. While streaming, render it as plain text and do the rich render on finish.
         const reasoning = trimSpaces(this.reasoningDisplayText ?? this.reasoning);
-        const displayReasoning = messageFormatting(reasoning, '', false, false, messageId, {}, true);
-
-        if (power_user.stream_fade_in) {
-            applyStreamFadeIn(this.messageReasoningContentDom, displayReasoning);
+        if (this.state === ReasoningState.Thinking) {
+            this.messageReasoningContentDom.textContent = reasoning;
         } else {
-            this.messageReasoningContentDom.innerHTML = displayReasoning;
+            const displayReasoning = messageFormatting(reasoning, '', false, false, messageId, {}, true);
+
+            if (power_user.stream_fade_in) {
+                applyStreamFadeIn(this.messageReasoningContentDom, displayReasoning);
+            } else {
+                this.messageReasoningContentDom.innerHTML = displayReasoning;
+            }
         }
 
         // Update tooltip for hidden reasoning edit
