@@ -654,3 +654,149 @@
         height: unset;
     }
 }
+
+/* World Info is a dense editor, so on mobile it behaves better as a focused popout than a full-width drawer. */
+@media screen and (max-width: 1000px) {
+    #WorldInfo.drawer-content.openDrawer {
+        display: flex !important;
+        flex-direction: column;
+        box-sizing: border-box;
+        width: min(760px, calc(100dvw - 16px)) !important;
+        min-width: 0 !important;
+        max-width: calc(100dvw - 16px) !important;
+        height: calc(100dvh - var(--topBarBlockSize) - 16px) !important;
+        min-height: 0 !important;
+        max-height: calc(100dvh - var(--topBarBlockSize) - 16px) !important;
+        left: 50% !important;
+        right: auto !important;
+        top: calc(var(--topBarBlockSize) + 8px) !important;
+        margin: 0 !important;
+        transform: translateX(-50%);
+        border-radius: 8px;
+        overflow: hidden;
+        z-index: 3200;
+    }
+
+    #WorldInfo #wi-holder {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #WorldInfo #wiTopBlock {
+        flex: 0 0 auto;
+    }
+
+    #WorldInfo #world_popup {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #WorldInfo #world_popup_entries_list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    #WorldInfo #world_popup_entries_list::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
+    }
+
+    #WorldInfo #world_popup > .flex-container,
+    #WorldInfo #world_popup_bottom_holder {
+        flex: 0 0 auto;
+    }
+
+    #WorldInfo #world_popup > .flex-container {
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+
+    #WorldInfo .world_info_select_block {
+        align-items: stretch;
+    }
+
+    #WorldInfo #world_editor_select {
+        min-width: 0;
+    }
+
+    #WorldInfo .world_entry .inline-drawer-header {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    #WorldInfo .world_entry_thin_controls {
+        flex: 0 0 100%;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    #WorldInfo .world_entry:has(.drag-handle) .drag-handle {
+        align-self: stretch;
+        display: flex;
+        flex: 0 0 18px;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+        width: 18px;
+    }
+
+    #WorldInfo .world_entry:has(.drag-handle) .world_entry_thin_controls {
+        flex: 1 1 calc(100% - 23px);
+        max-width: calc(100% - 23px);
+    }
+
+    #WorldInfo .world_entry_thin_controls > .flex-container.alignitemscenter.wide100p {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+
+    #WorldInfo .WIEntryTitleAndStatus {
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    #WorldInfo .WIEntryTitleAndStatus > .flex-container.flex1 {
+        min-width: 0;
+    }
+
+    #WorldInfo .WIEntryTitleAndStatus textarea[name="comment"] {
+        min-width: 0;
+        width: 100%;
+    }
+
+    #WorldInfo .WIEntryHeaderControls,
+    #WorldInfo .WIEnteryHeaderControls {
+        flex: 1 1 100%;
+        min-width: 0;
+        width: 100%;
+    }
+
+    #WorldInfo .WIEntryHeaderControls .world_entry_form_control,
+    #WorldInfo .WIEnteryHeaderControls .world_entry_form_control {
+        flex: 1 1 calc(50% - 5px);
+        min-width: 0;
+    }
+
+    #WorldInfo .WIEntryHeaderControls select,
+    #WorldInfo .WIEntryHeaderControls input,
+    #WorldInfo .WIEnteryHeaderControls select,
+    #WorldInfo .WIEnteryHeaderControls input {
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    #WorldInfo .world_entry .move_entry_button {
+        margin-left: auto;
+    }
+}

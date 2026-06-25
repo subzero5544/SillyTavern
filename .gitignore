@@ -70,3 +70,6 @@ public/scripts/extensions/wulf-character-effects-old.zip
 /tools
 *.zip
 /hyperagent2api
+/_janitor_backups
+/prompt-sync
+/janitor-import
