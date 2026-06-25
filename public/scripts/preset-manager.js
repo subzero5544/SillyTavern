@@ -582,10 +582,6 @@ class PresetManager {
      * @returns {any} Selected preset value
      */
     getSelectedPreset() {
-        if (this.apiId === 'openai') {
-            return openai_setting_names?.[oai_settings.preset_settings_openai];
-        }
-
         return this.select?.selectedOptions?.[0]?.value ?? $(this.select).find('option:selected').val();
     }
 
@@ -594,10 +590,6 @@ class PresetManager {
      * @returns {string} Selected preset name
      */
     getSelectedPresetName() {
-        if (this.apiId === 'openai') {
-            return oai_settings.preset_settings_openai;
-        }
-
         return this.select?.selectedOptions?.[0]?.textContent ?? $(this.select).find('option:selected').text();
     }
 
