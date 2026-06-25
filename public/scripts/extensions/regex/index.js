@@ -8,7 +8,7 @@ import { commonEnumProviders, enumIcons } from '../../slash-commands/SlashComman
 import { SlashCommandEnumValue, enumTypes } from '../../slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { download, equalsIgnoreCaseAndAccents, escapeHtml, getFileText, getSortableDelay, isFalseBoolean, isTrueBoolean, regexFromString, setInfoBlock, uuidv4 } from '../../utils.js';
-import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, REGEX_REPLACE_MODE, regex_placement, RegexProvider, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
+import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, refreshActivePresetRegexScripts, REGEX_REPLACE_MODE, regex_placement, RegexProvider, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
 import { t } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
@@ -2004,7 +2004,7 @@ function notifyReloadCurrentChat(presetName) {
 async function checkPresetEmbeddedRegexScripts() {
     const apiId = getCurrentPresetAPI();
     const name = getCurrentPresetName();
-    const scripts = getScriptsByType(SCRIPT_TYPES.PRESET);
+    const scripts = refreshActivePresetRegexScripts(apiId, name);
 
     if (Array.isArray(scripts) && scripts.length > 0) {
         if (!isPresetScriptsAllowed(apiId, name)) {
@@ -2036,7 +2036,7 @@ async function onMainApiChanged({ apiId }) {
         return;
     }
     const presetName = presetManager.getSelectedPresetName();
-    const presetScripts = presetManager.readPresetExtensionField({ path: 'regex_scripts' }) ?? [];
+    const presetScripts = refreshActivePresetRegexScripts(apiId, presetName);
     if (getCurrentChatId() &&
         isPresetScriptsAllowed(apiId, presetName) &&
         Array.isArray(presetScripts) &&

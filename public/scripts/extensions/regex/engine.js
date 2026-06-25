@@ -34,6 +34,24 @@ export const SCRIPT_TYPE_UNKNOWN = -1;
  */
 const DEFAULT_GET_REGEX_SCRIPTS_OPTIONS = Object.freeze({ allowedOnly: false });
 
+const activePresetRegexScripts = {
+    initialized: false,
+    apiId: null,
+    presetName: null,
+    allowed: false,
+    scripts: [],
+};
+
+function normalizeRegexScripts(scripts) {
+    return Array.isArray(scripts) ? scripts : [];
+}
+
+function isActivePresetRegexCacheFor(apiId, presetName) {
+    return activePresetRegexScripts.initialized
+        && activePresetRegexScripts.apiId === (apiId ?? null)
+        && activePresetRegexScripts.presetName === (presetName ?? null);
+}
+
 /**
  * Manages the compiled regex cache with LRU eviction.
  */
@@ -120,11 +138,13 @@ export function getScriptsByType(scriptType, { allowedOnly } = DEFAULT_GET_REGEX
         }
         case SCRIPT_TYPES.PRESET: {
             if (allowedOnly) {
-                const apiId = getCurrentPresetAPI();
-                const allowedPresetNames = apiId ? extension_settings?.preset_allowed_regex?.[apiId] : null;
-                if (!Array.isArray(allowedPresetNames) || !allowedPresetNames.includes(getCurrentPresetName())) {
+                if (!activePresetRegexScripts.initialized) {
+                    refreshActivePresetRegexScripts();
+                }
+                if (!activePresetRegexScripts.allowed) {
                     return [];
                 }
+                return activePresetRegexScripts.scripts;
             }
             const presetManager = getPresetManager();
             const presetScripts = presetManager?.readPresetExtensionField({ path: 'regex_scripts' });
@@ -154,6 +174,7 @@ export async function saveScriptsByType(scripts, scriptType) {
         case SCRIPT_TYPES.PRESET: {
             const presetManager = getPresetManager();
             await presetManager.writePresetExtensionField({ path: 'regex_scripts', value: scripts });
+            refreshActivePresetRegexScripts();
             break;
         }
         default:
@@ -224,6 +245,35 @@ export function isPresetScriptsAllowed(apiId, presetName) {
 }
 
 /**
+ * Refreshes the cached active preset regex scripts.
+ * This avoids querying the large preset <select> during hot formatting paths.
+ * @param {string?} [apiId] API ID
+ * @param {string?} [presetName] Preset name
+ * @returns {RegexScript[]} Active preset regex scripts
+ */
+export function refreshActivePresetRegexScripts(apiId = getCurrentPresetAPI(), presetName = getCurrentPresetName()) {
+    if (!apiId || !presetName) {
+        activePresetRegexScripts.initialized = false;
+        activePresetRegexScripts.apiId = null;
+        activePresetRegexScripts.presetName = null;
+        activePresetRegexScripts.allowed = false;
+        activePresetRegexScripts.scripts = [];
+        return activePresetRegexScripts.scripts;
+    }
+
+    const presetManager = getPresetManager(apiId);
+    const presetScripts = presetManager?.readPresetExtensionField({ name: presetName, path: 'regex_scripts' });
+
+    activePresetRegexScripts.initialized = true;
+    activePresetRegexScripts.apiId = apiId ?? null;
+    activePresetRegexScripts.presetName = presetName ?? null;
+    activePresetRegexScripts.allowed = isPresetScriptsAllowed(apiId, presetName);
+    activePresetRegexScripts.scripts = normalizeRegexScripts(presetScripts);
+
+    return activePresetRegexScripts.scripts;
+}
+
+/**
  * Allow preset's regexes to be used
  * @param {string} apiId API ID
  * @param {string} presetName Preset name
@@ -239,6 +289,9 @@ export function allowPresetScripts(apiId, presetName) {
     if (!extension_settings.preset_allowed_regex[apiId].includes(presetName)) {
         extension_settings.preset_allowed_regex[apiId].push(presetName);
         saveSettingsDebounced();
+    }
+    if (isActivePresetRegexCacheFor(apiId, presetName)) {
+        activePresetRegexScripts.allowed = true;
     }
 }
 
@@ -259,6 +312,9 @@ export function disallowPresetScripts(apiId, presetName) {
     if (index !== -1) {
         extension_settings.preset_allowed_regex[apiId].splice(index, 1);
         saveSettingsDebounced();
+    }
+    if (isActivePresetRegexCacheFor(apiId, presetName)) {
+        activePresetRegexScripts.allowed = false;
     }
 }
 
