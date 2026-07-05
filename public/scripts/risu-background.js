@@ -9,6 +9,11 @@ let lastAppliedSignature = '';
 let viewportMetricsResizeHandler = null;
 let viewportMetricsObserver = null;
 let viewportMetricsMutationObserver = null;
+let viewportMetricsFrame = null;
+const viewportMetricsTimeouts = new Map();
+let viewportMetricsTransitionHandler = null;
+let viewportMetricsScrollElement = null;
+let viewportMetricsScrollHandler = null;
 
 export const RISU_SANITIZER_ATTRIBUTES = [
     'allow',
@@ -54,6 +59,44 @@ function getVisibleChatRightEdge(chatRect, viewportWidth) {
     return rightEdge;
 }
 
+function setRisuMetricProperty(element, property, value) {
+    const normalized = `${Math.max(0, Math.round(value * 100) / 100)}px`;
+    if (element.style.getPropertyValue(property) !== normalized) {
+        element.style.setProperty(property, normalized);
+    }
+}
+
+function createsFixedContainingBlock(element) {
+    const style = getComputedStyle(element);
+    const isActiveValue = (value) => Boolean(value) && value !== 'none' && value !== 'normal' && value !== 'auto';
+
+    return isActiveValue(style.transform)
+        || isActiveValue(style.perspective)
+        || isActiveValue(style.filter)
+        || isActiveValue(style.backdropFilter)
+        || style.contentVisibility === 'auto'
+        || style.containerType !== 'normal'
+        || /\b(layout|paint|strict|content)\b/.test(style.contain)
+        || /\b(transform|perspective|filter|backdrop-filter)\b/.test(style.willChange);
+}
+
+function rememberRisuFloatingControlOffsets(chatElement) {
+    if (chatElement.classList.contains('risu-fixed-ui-scroll-contained')) {
+        return;
+    }
+
+    for (const element of chatElement.querySelectorAll('.custom-buttons-container')) {
+        if (element.style.getPropertyValue('--risu-fixed-control-top')) {
+            continue;
+        }
+
+        const top = getComputedStyle(element).top;
+        if (top && top !== 'auto') {
+            element.style.setProperty('--risu-fixed-control-top', top);
+        }
+    }
+}
+
 function updateRisuChatViewportMetrics(chatElement = document.getElementById('chat')) {
     if (!chatElement) {
         return;
@@ -63,11 +106,57 @@ function updateRisuChatViewportMetrics(chatElement = document.getElementById('ch
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || rect.right;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || rect.bottom;
     const rightEdge = getVisibleChatRightEdge(rect, viewportWidth);
+    const visibleRightInset = Math.max(0, rect.right - rightEdge);
 
-    chatElement.style.setProperty('--risu-chat-left-edge', `${Math.max(0, rect.left)}px`);
-    chatElement.style.setProperty('--risu-chat-right-edge', `${Math.max(0, viewportWidth - rightEdge)}px`);
-    chatElement.style.setProperty('--risu-chat-top-edge', `${Math.max(0, rect.top)}px`);
-    chatElement.style.setProperty('--risu-chat-bottom-edge', `${Math.max(0, viewportHeight - rect.bottom)}px`);
+    rememberRisuFloatingControlOffsets(chatElement);
+    chatElement.classList.toggle('risu-fixed-ui-scroll-contained', createsFixedContainingBlock(chatElement));
+    setRisuMetricProperty(chatElement, '--risu-chat-left-edge', rect.left);
+    setRisuMetricProperty(chatElement, '--risu-chat-right-edge', viewportWidth - rightEdge);
+    setRisuMetricProperty(chatElement, '--risu-chat-top-edge', rect.top);
+    setRisuMetricProperty(chatElement, '--risu-chat-bottom-edge', viewportHeight - rect.bottom);
+    setRisuMetricProperty(chatElement, '--risu-chat-visible-width', rightEdge - rect.left);
+    setRisuMetricProperty(chatElement, '--risu-chat-visible-height', rect.height);
+    setRisuMetricProperty(chatElement, '--risu-chat-scroll-top', chatElement.scrollTop || 0);
+    setRisuMetricProperty(chatElement, '--risu-chat-visible-right-inset', visibleRightInset);
+    setRisuMetricProperty(chatElement, '--risu-chat-control-right-offset', visibleRightInset + 20);
+}
+
+function scheduleRisuChatViewportMetricsUpdate(chatElement = document.getElementById('chat')) {
+    if (!chatElement) {
+        return;
+    }
+
+    updateRisuChatViewportMetrics(chatElement);
+
+    if (viewportMetricsFrame === null) {
+        viewportMetricsFrame = requestAnimationFrame(() => {
+            viewportMetricsFrame = null;
+            updateRisuChatViewportMetrics();
+        });
+    }
+
+    for (const delay of [50, 150, 350]) {
+        const existingTimeout = viewportMetricsTimeouts.get(delay);
+        if (existingTimeout) {
+            clearTimeout(existingTimeout);
+        }
+
+        viewportMetricsTimeouts.set(delay, setTimeout(() => {
+            viewportMetricsTimeouts.delete(delay);
+            updateRisuChatViewportMetrics();
+        }, delay));
+    }
+}
+
+function getRisuViewportMetricElements(chatElement) {
+    return [
+        chatElement,
+        document.getElementById('sheld'),
+        document.getElementById('right-nav-panel'),
+        document.getElementById('top-bar'),
+        document.getElementById('form_sheld'),
+        document.getElementById('send_form'),
+    ].filter((element, index, elements) => element && elements.indexOf(element) === index);
 }
 
 function clearRisuChatViewportMetrics() {
@@ -76,49 +165,96 @@ function clearRisuChatViewportMetrics() {
     chatElement?.style.removeProperty('--risu-chat-right-edge');
     chatElement?.style.removeProperty('--risu-chat-top-edge');
     chatElement?.style.removeProperty('--risu-chat-bottom-edge');
+    chatElement?.style.removeProperty('--risu-chat-visible-width');
+    chatElement?.style.removeProperty('--risu-chat-visible-height');
+    chatElement?.style.removeProperty('--risu-chat-scroll-top');
+    chatElement?.style.removeProperty('--risu-chat-visible-right-inset');
+    chatElement?.style.removeProperty('--risu-chat-control-right-offset');
+    chatElement?.classList.remove('risu-fixed-ui-scroll-contained');
 
     if (viewportMetricsResizeHandler) {
         window.removeEventListener('resize', viewportMetricsResizeHandler);
         viewportMetricsResizeHandler = null;
     }
+    if (viewportMetricsScrollElement && viewportMetricsScrollHandler) {
+        viewportMetricsScrollElement.removeEventListener('scroll', viewportMetricsScrollHandler);
+        viewportMetricsScrollElement = null;
+        viewportMetricsScrollHandler = null;
+    }
+    if (viewportMetricsFrame !== null) {
+        cancelAnimationFrame(viewportMetricsFrame);
+        viewportMetricsFrame = null;
+    }
+    for (const timeout of viewportMetricsTimeouts.values()) {
+        clearTimeout(timeout);
+    }
+    viewportMetricsTimeouts.clear();
     viewportMetricsObserver?.disconnect();
     viewportMetricsObserver = null;
     viewportMetricsMutationObserver?.disconnect();
     viewportMetricsMutationObserver = null;
+    if (viewportMetricsTransitionHandler) {
+        document.removeEventListener('transitionend', viewportMetricsTransitionHandler, true);
+        document.removeEventListener('animationend', viewportMetricsTransitionHandler, true);
+        viewportMetricsTransitionHandler = null;
+    }
 }
 
 function observeRisuChatViewportMetrics(chatElement) {
-    updateRisuChatViewportMetrics(chatElement);
+    scheduleRisuChatViewportMetricsUpdate(chatElement);
 
     if (!viewportMetricsResizeHandler) {
-        viewportMetricsResizeHandler = () => updateRisuChatViewportMetrics();
+        viewportMetricsResizeHandler = () => scheduleRisuChatViewportMetricsUpdate();
         window.addEventListener('resize', viewportMetricsResizeHandler);
+    }
+
+    if (viewportMetricsScrollElement !== chatElement) {
+        if (viewportMetricsScrollElement && viewportMetricsScrollHandler) {
+            viewportMetricsScrollElement.removeEventListener('scroll', viewportMetricsScrollHandler);
+        }
+        viewportMetricsScrollElement = chatElement;
+        viewportMetricsScrollHandler = () => updateRisuChatViewportMetrics(chatElement);
+        chatElement.addEventListener('scroll', viewportMetricsScrollHandler, { passive: true });
     }
 
     viewportMetricsObserver?.disconnect();
     if (typeof ResizeObserver === 'function') {
-        viewportMetricsObserver = new ResizeObserver(() => updateRisuChatViewportMetrics());
-        viewportMetricsObserver.observe(chatElement);
-        const shellElement = document.getElementById('sheld');
-        const rightPanel = document.getElementById('right-nav-panel');
-        if (shellElement && shellElement !== chatElement) {
-            viewportMetricsObserver.observe(shellElement);
-        }
-        if (rightPanel) {
-            viewportMetricsObserver.observe(rightPanel);
+        viewportMetricsObserver = new ResizeObserver(() => scheduleRisuChatViewportMetricsUpdate());
+        for (const element of getRisuViewportMetricElements(chatElement)) {
+            viewportMetricsObserver.observe(element);
         }
     }
 
     viewportMetricsMutationObserver?.disconnect();
     if (typeof MutationObserver === 'function') {
-        viewportMetricsMutationObserver = new MutationObserver(() => requestAnimationFrame(() => updateRisuChatViewportMetrics()));
-        const shellElement = document.getElementById('sheld');
-        const rightPanel = document.getElementById('right-nav-panel');
-        for (const element of [chatElement, shellElement, rightPanel]) {
+        viewportMetricsMutationObserver = new MutationObserver(() => scheduleRisuChatViewportMetricsUpdate());
+        for (const element of [
+            ...getRisuViewportMetricElements(chatElement),
+            document.documentElement,
+            document.body,
+        ]) {
             if (element) {
                 viewportMetricsMutationObserver.observe(element, { attributes: true, attributeFilter: ['class', 'style'] });
             }
         }
+    }
+
+    if (!viewportMetricsTransitionHandler) {
+        viewportMetricsTransitionHandler = (event) => {
+            const target = event?.target;
+            if (!(target instanceof Element)) {
+                scheduleRisuChatViewportMetricsUpdate();
+                return;
+            }
+
+            if (target === document.documentElement
+                || target === document.body
+                || target.closest('#sheld, #right-nav-panel, #top-bar, #form_sheld, #send_form, #chat')) {
+                scheduleRisuChatViewportMetricsUpdate();
+            }
+        };
+        document.addEventListener('transitionend', viewportMetricsTransitionHandler, true);
+        document.addEventListener('animationend', viewportMetricsTransitionHandler, true);
     }
 }
 
@@ -237,6 +373,10 @@ function appendStyle(cssText, hasOverlay) {
             '#chat .custom-settings-panel { position: fixed !important; top: var(--risu-chat-top-edge, 0px) !important; right: calc(var(--risu-chat-right-edge, 0px) + 20px) !important; height: calc(100vh - var(--risu-chat-top-edge, 0px) - var(--risu-chat-bottom-edge, 0px)) !important; max-width: min(350px, calc(100vw - var(--risu-chat-left-edge, 0px) - var(--risu-chat-right-edge, 0px) - 40px)) !important; transform: translateX(calc(100% + 20px)) !important; z-index: 1000 !important; }',
             '#chat .custom-settings-panel.custom-opened { right: calc(var(--risu-chat-right-edge, 0px) + 20px) !important; transform: translateX(0) !important; }',
             '#chat .custom-sys-backdrop { position: fixed !important; inset: var(--risu-chat-top-edge, 0px) var(--risu-chat-right-edge, 0px) var(--risu-chat-bottom-edge, 0px) var(--risu-chat-left-edge, 0px) !important; z-index: 999 !important; }',
+            '#chat.risu-fixed-ui-scroll-contained .custom-buttons-container { top: calc(var(--risu-chat-scroll-top, 0px) + var(--risu-fixed-control-top, 40px)) !important; right: var(--risu-chat-control-right-offset, 20px) !important; }',
+            '#chat.risu-fixed-ui-scroll-contained .custom-settings-panel { top: var(--risu-chat-scroll-top, 0px) !important; right: var(--risu-chat-control-right-offset, 20px) !important; height: var(--risu-chat-visible-height, 100vh) !important; max-height: var(--risu-chat-visible-height, 100vh) !important; }',
+            '#chat.risu-fixed-ui-scroll-contained .custom-settings-panel.custom-opened { right: var(--risu-chat-control-right-offset, 20px) !important; }',
+            '#chat.risu-fixed-ui-scroll-contained .custom-sys-backdrop { top: var(--risu-chat-scroll-top, 0px) !important; right: auto !important; bottom: auto !important; left: 0 !important; width: var(--risu-chat-visible-width, 100%) !important; height: var(--risu-chat-visible-height, 100vh) !important; }',
         ].join('\n'),
     ].filter(Boolean).join('\n');
     document.head.appendChild(style);

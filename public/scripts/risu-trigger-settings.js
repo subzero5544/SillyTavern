@@ -131,20 +131,29 @@ function plural(count, noun) {
 function createCheckboxRow({ title, description, checked, disabled = false }) {
     const label = document.createElement('label');
     label.classList.add('checkbox_label', 'flexWrap', 'alignItemsBaseline');
+    label.style.alignItems = 'flex-start';
+    label.style.boxSizing = 'border-box';
+    label.style.maxWidth = '100%';
+    label.style.minWidth = '0';
+    label.style.width = '100%';
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.checked = Boolean(checked);
     checkbox.disabled = Boolean(disabled);
+    checkbox.style.marginTop = '0.25em';
 
     const text = document.createElement('div');
     text.classList.add('flex1');
+    text.style.minWidth = '0';
 
     const heading = document.createElement('div');
     heading.textContent = title;
 
     const details = document.createElement('small');
     details.textContent = description;
+    details.style.display = 'block';
+    details.style.overflowWrap = 'anywhere';
 
     text.append(heading, details);
     label.append(checkbox, text);
@@ -162,18 +171,28 @@ export async function showRisuCardFeaturePopup(character, { importPrompt = false
         ? { triggers: summary.hasDeclarative, code: summary.hasCode, network: false }
         : current;
     const content = document.createElement('div');
-    content.classList.add('flex-container', 'flexFlowColumn', 'wide100p');
+    content.classList.add('flex-container', 'flexFlowColumn');
+    content.style.boxSizing = 'border-box';
+    content.style.gap = '10px';
+    content.style.maxWidth = '100%';
+    content.style.width = 'min(420px, 100%)';
 
     const title = document.createElement('h3');
     title.textContent = importPrompt
         ? `${character?.name || 'This card'} ships RisuAI interactive features`
         : `RisuAI card features for ${character?.name || 'this card'}`;
+    title.style.margin = '0';
+    title.style.overflowWrap = 'anywhere';
 
     const note = document.createElement('p');
     note.textContent = 'Choose which imported card features are allowed to run for this character.';
+    note.style.margin = '0';
+    note.style.overflowWrap = 'anywhere';
 
     const rows = document.createElement('div');
     rows.classList.add('flex-container', 'flexFlowColumn', 'wide100p');
+    rows.style.gap = '8px';
+    rows.style.minWidth = '0';
 
     let triggersCheckbox = null;
     let codeCheckbox = null;
@@ -190,7 +209,7 @@ export async function showRisuCardFeaturePopup(character, { importPrompt = false
     }
 
     if (summary.hasCode) {
-        const language = summary.hasLua && summary.jsCount > 0 ? 'JavaScript/Lua' : summary.hasLua ? 'Lua' : 'JavaScript';
+        const language = summary.hasLua && summary.jsCount > 0 ? 'JS/Lua' : summary.hasLua ? 'Lua' : 'JavaScript';
         const codeRow = createCheckboxRow({
             title: `Run ${language} code`,
             description: `${plural(summary.codeCount, 'code script')} through the restricted card-code runtime. Enable only for cards you trust.`,
@@ -221,8 +240,11 @@ export async function showRisuCardFeaturePopup(character, { importPrompt = false
     const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', {
         okButton: importPrompt ? 'Enable selected' : 'Save',
         cancelButton: importPrompt ? 'Skip' : 'Cancel',
-        wider: true,
         leftAlign: true,
+        onOpen: (popup) => {
+            popup.dlg.style.width = 'min(460px, 90dvw)';
+            popup.dlg.style.maxWidth = '90dvw';
+        },
     });
 
     if (result !== POPUP_RESULT.AFFIRMATIVE) {
@@ -242,4 +264,3 @@ export async function showRisuCardFeaturePopup(character, { importPrompt = false
     setRisuCardFeatureSettings(character, settings);
     return { shown: true, saved: true, settings: normalizeSettings(settings) };
 }
-

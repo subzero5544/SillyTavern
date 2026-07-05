@@ -1,10 +1,19 @@
 const RUN_TIMEOUT_MS = 120_000;
+
+function toRuntimeUrl(url) {
+    try {
+        return new URL(url, window.location.href).href;
+    } catch {
+        return url;
+    }
+}
+
 const WASMOON_SCRIPT_URLS = [
-    '/lib/risu/wasmoon.js',
+    toRuntimeUrl('/lib/risu/wasmoon.js'),
     'https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/index.js',
 ];
 const WASMOON_WASM_URLS = [
-    '/lib/risu/glue.wasm',
+    toRuntimeUrl('/lib/risu/glue.wasm'),
     'https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/glue.wasm',
 ];
 
