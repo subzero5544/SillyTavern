@@ -258,6 +258,7 @@ import { renderRisuAssetMacros, getRisuAssetNames } from './scripts/risu-assets.
 import { evaluateRisuCbs, protectRisuCbsMacros } from './scripts/risu-cbs.js';
 import { applyRisuBackgroundHtml, RISU_SANITIZER_ATTRIBUTES } from './scripts/risu-background.js';
 import { initRisuTriggers } from './scripts/risu-triggers.js';
+import { getRisuCardTriggerSummary, showRisuCardFeaturePopup } from './scripts/risu-trigger-settings.js';
 import { getLocalVariable, getGlobalVariable } from './scripts/variables.js';
 import { currentUser, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
@@ -828,6 +829,8 @@ export function getRisuCbsContext(risuCharacter, { messageId, role = 'char' } = 
         defaultVariables: risuCharacter?.data?.extensions?.risuai?.defaultVariables,
         chatIndex: Number.isFinite(numericMessageId) && numericMessageId >= 0 ? numericMessageId : undefined,
         lastMessageId: chat.length - 1,
+        screenWidth: Math.round(window.innerWidth || document.documentElement.clientWidth || 1024),
+        screenHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 768),
         role,
         assetNames: getRisuAssetNames(risuCharacter),
         charAvatarUrl: risuCharacter?.avatar && risuCharacter.avatar !== 'none' ? encodeURI(`/characters/${risuCharacter.avatar}`) : '',
@@ -873,6 +876,16 @@ function initRisuBackgroundHtml() {
     eventSource.on(event_types.CHAT_CHANGED, refreshRisuBackgroundHtml);
     eventSource.on(event_types.CHARACTER_EDITED, refreshRisuBackgroundHtml);
     eventSource.on(event_types.CHARACTER_DELETED, refreshRisuBackgroundHtml);
+    eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, refreshRisuBackgroundHtml);
+    eventSource.makeLast(event_types.USER_MESSAGE_RENDERED, refreshRisuBackgroundHtml);
+    eventSource.makeLast(event_types.MESSAGE_UPDATED, refreshRisuBackgroundHtml);
+    eventSource.makeLast(event_types.MESSAGE_SWIPED, refreshRisuBackgroundHtml);
+
+    let resizeRefreshTimer;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeRefreshTimer);
+        resizeRefreshTimer = setTimeout(refreshRisuBackgroundHtml, 150);
+    });
 }
 
 function initStandaloneMode() {
@@ -1553,7 +1566,24 @@ export async function showMoreMessages(messagesToLoad = null) {
     await eventSource.emit(event_types.MORE_MESSAGES_LOADED);
 }
 
-export async function printMessages() {
+function restoreChatScrollTop(scrollTop) {
+    const element = chatElement[0];
+    if (!element) {
+        return;
+    }
+
+    const restore = () => {
+        element.scrollTop = scrollTop;
+    };
+
+    restore();
+    requestAnimationFrame(restore);
+    setTimeout(restore, debounce_timeout.quick);
+    setTimeout(restore, debounce_timeout.short);
+}
+
+export async function printMessages({ preserveScroll = false } = {}) {
+    const preservedScrollTop = preserveScroll ? chatElement.scrollTop() : 0;
     let startIndex = 0;
     let count = power_user.chat_truncation || Number.MAX_SAFE_INTEGER;
 
@@ -1563,6 +1593,12 @@ export async function printMessages() {
     }
 
     await redisplayChat({ startIndex, fade: false });
+    refreshRisuBackgroundHtml();
+
+    if (preserveScroll) {
+        restoreChatScrollTop(preservedScrollTop);
+        return;
+    }
 
     scrollChatToBottom({ waitForFrame: true });
     delay(debounce_timeout.short).then(() => scrollOnMediaLoad());
@@ -9192,6 +9228,8 @@ export function select_selected_character(chid, { switchMenu = true } = {}) {
 
     // Update some stuff about the char management dropdown
     $('#character_source').attr('disabled', !getCharacterSource(chid) ? '' : null);
+    const risuSummary = getRisuCardTriggerSummary(characters[chid]);
+    $('#risu_card_features').toggle(risuSummary.hasFeatures).prop('disabled', !risuSummary.hasFeatures);
 
     eventSource.emit(event_types.CHARACTER_EDITOR_OPENED, chid);
 
@@ -9261,6 +9299,7 @@ function select_rm_create({ switchMenu = true } = {}) {
     $('#form_create').attr('actiontype', 'createcharacter');
     $('.form_create_bottom_buttons_block .chat_lorebook_button').hide();
     $('#character_open_media_overrides').hide();
+    $('#risu_card_features').hide().prop('disabled', true);
 }
 
 function select_rm_characters() {
@@ -10856,11 +10895,19 @@ export async function processDroppedFiles(files, data = new Map()) {
  */
 async function importCharactersTags(avatarFileNames) {
     await getCharacters();
+    const importedCharacters = [];
     for (let i = 0; i < avatarFileNames.length; i++) {
+        const importedCharacter = characters.find(character => character.avatar === avatarFileNames[i]);
+        if (importedCharacter) {
+            importedCharacters.push(importedCharacter);
+        }
         if (power_user.tag_import_setting !== tag_import_setting.NONE) {
-            const importedCharacter = characters.find(character => character.avatar === avatarFileNames[i]);
             await importTags(importedCharacter);
         }
+    }
+
+    for (const importedCharacter of importedCharacters) {
+        await showRisuCardFeaturePopup(importedCharacter, { importPrompt: true });
     }
 }
 
@@ -12748,6 +12795,14 @@ jQuery(async function () {
                 break;
             case 'renameCharButton':
                 await renameCharacter();
+                break;
+            case 'risu_card_features':
+                if (this_chid !== undefined && characters[this_chid]) {
+                    const result = await showRisuCardFeaturePopup(characters[this_chid]);
+                    if (result.saved) {
+                        toastr.success('RisuAI card feature settings saved.');
+                    }
+                }
                 break;
             case 'import_character_info':
                 await importEmbeddedWorldInfo();

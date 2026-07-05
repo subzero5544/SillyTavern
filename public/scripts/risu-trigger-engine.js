@@ -1,6 +1,9 @@
+import { runSandboxedRisuTriggerCode } from './risu-code-sandbox.js';
+
 const MAX_RECURSION_DEPTH = 10;
 const MAX_LOOP_ITERATIONS = 10000;
 const MAX_WAIT_MS = 60_000;
+const RISU_CODE_EFFECT_TYPES = new Set(['triggercode', 'triggerlua']);
 
 export const RISU_TRIGGER_SUPPORTED_EFFECTS = new Set([
     'setvar',
@@ -180,8 +183,57 @@ function toRisuNull(value) {
     return value === undefined || value === null || String(value) === '' ? 'null' : String(value);
 }
 
+function toRisuNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+}
+
+function isRisuNumericLike(value) {
+    const text = String(value ?? '').trim();
+    return text === '' || text.toLocaleLowerCase() === 'null' || /^[-+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text);
+}
+
+function compareRisuEqual(left, right) {
+    if (isRisuNumericLike(left) && isRisuNumericLike(right)) {
+        return toRisuNumber(left) === toRisuNumber(right);
+    }
+
+    return String(left ?? '') === String(right ?? '');
+}
+
 function sleep(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function getLowLevelAccessReason(trigger, runtime) {
+    if (!trigger.lowLevelAccess) {
+        return 'low-level-access-required';
+    }
+    if (!runtime.codeNetworkEnabled) {
+        return 'network-access-disabled';
+    }
+    return '';
+}
+
+function shouldSkipEffectForPermissions(effect, trigger, runtime, result) {
+    if (!effect?.type) {
+        return false;
+    }
+
+    if (RISU_CODE_EFFECT_TYPES.has(effect.type)) {
+        if (!runtime.codeSandboxEnabled) {
+            result.unsupported.push({ type: effect.type, reason: 'code-sandbox-disabled', trigger: trigger.comment });
+            return true;
+        }
+        return false;
+    }
+
+    if (runtime.declarativeTriggersEnabled === false) {
+        result.unsupported.push({ type: effect.type, reason: 'triggers-disabled', trigger: trigger.comment });
+        return true;
+    }
+
+    return false;
 }
 
 function compareValues(left, operator, right) {
@@ -189,17 +241,17 @@ function compareValues(left, operator, right) {
         case 'true':
             return left === 'true' || left === '1';
         case '=':
-            return left === right;
+            return compareRisuEqual(left, right);
         case '!=':
-            return left !== right;
+            return !compareRisuEqual(left, right);
         case '>':
-            return Number(left) > Number(right);
+            return toRisuNumber(left) > toRisuNumber(right);
         case '<':
-            return Number(left) < Number(right);
+            return toRisuNumber(left) < toRisuNumber(right);
         case '>=':
-            return Number(left) >= Number(right);
+            return toRisuNumber(left) >= toRisuNumber(right);
         case '<=':
-            return Number(left) <= Number(right);
+            return toRisuNumber(left) <= toRisuNumber(right);
         case 'null':
             return left === 'null';
         default:
@@ -210,13 +262,13 @@ function compareValues(left, operator, right) {
 function compareAdvanced(left, operator, right) {
     switch (operator) {
         case '=':
-            if (!isNaN(Number(left)) && !isNaN(Number(right))) {
-                return Number(left) === Number(right);
+            if (isRisuNumericLike(left) && isRisuNumericLike(right)) {
+                return toRisuNumber(left) === toRisuNumber(right);
             }
             return left === right;
         case '!=':
-            if (!isNaN(Number(left)) && !isNaN(Number(right))) {
-                return Number(left) !== Number(right);
+            if (isRisuNumericLike(left) && isRisuNumericLike(right)) {
+                return toRisuNumber(left) !== toRisuNumber(right);
             }
             return left !== right;
         case '\u2208':
@@ -228,11 +280,11 @@ function compareAdvanced(left, operator, right) {
         case '\u220c':
             return !parseJsonArray(left).includes(right);
         case '\u2252': {
-            const leftNumber = Number(left);
-            const rightNumber = Number(right);
-            if (Number.isNaN(leftNumber) || Number.isNaN(rightNumber)) {
+            if (!isRisuNumericLike(left) || !isRisuNumericLike(right)) {
                 return left.toLocaleLowerCase().replace(/ /g, '') === right.toLocaleLowerCase().replace(/ /g, '');
             }
+            const leftNumber = toRisuNumber(left);
+            const rightNumber = toRisuNumber(right);
             return Math.abs(leftNumber - rightNumber) < 0.0001;
         }
         case '\u2261':
@@ -724,7 +776,7 @@ function createRisuScriptApi(effect, trigger, runtime, result) {
         await setLorebookEntries(entries, runtime, result);
         return null;
     };
-    const lowLevelAllowed = () => Boolean(trigger.lowLevelAccess);
+    const lowLevelAllowed = () => !getLowLevelAccessReason(trigger, runtime);
     const lowLevelUnavailable = (type, reason) => {
         result.unsupported.push({ type, reason, trigger: trigger.comment });
         return null;
@@ -778,7 +830,7 @@ function createRisuScriptApi(effect, trigger, runtime, result) {
         },
         LLM: async (prompt, options = {}) => {
             if (!lowLevelAllowed()) {
-                return lowLevelUnavailable(scriptType, 'low-level-access-required');
+                return lowLevelUnavailable(scriptType, getLowLevelAccessReason(trigger, runtime));
             }
             if (typeof runtime.runLLM !== 'function') {
                 return lowLevelUnavailable(scriptType, 'llm-runtime-unavailable');
@@ -787,7 +839,7 @@ function createRisuScriptApi(effect, trigger, runtime, result) {
         },
         request: async (url) => {
             if (!lowLevelAllowed()) {
-                return lowLevelUnavailable(scriptType, 'low-level-access-required');
+                return lowLevelUnavailable(scriptType, getLowLevelAccessReason(trigger, runtime));
             }
             if (typeof runtime.request !== 'function') {
                 return lowLevelUnavailable(scriptType, 'request-runtime-unavailable');
@@ -796,7 +848,7 @@ function createRisuScriptApi(effect, trigger, runtime, result) {
         },
         generateImage: async (prompt, negativePrompt = '') => {
             if (!lowLevelAllowed()) {
-                return lowLevelUnavailable(scriptType, 'low-level-access-required');
+                return lowLevelUnavailable(scriptType, getLowLevelAccessReason(trigger, runtime));
             }
             if (typeof runtime.generateImage !== 'function') {
                 return lowLevelUnavailable(scriptType, 'image-runtime-unavailable');
@@ -805,7 +857,7 @@ function createRisuScriptApi(effect, trigger, runtime, result) {
         },
         similarity: async (source, values) => {
             if (!lowLevelAllowed()) {
-                return lowLevelUnavailable(scriptType, 'low-level-access-required');
+                return lowLevelUnavailable(scriptType, getLowLevelAccessReason(trigger, runtime));
             }
             const candidates = Array.isArray(values) ? values.map(toText) : splitRisuSectionList(values);
             if (typeof runtime.checkSimilarity === 'function') {
@@ -949,136 +1001,21 @@ async function runRisuTriggerCode(effect, trigger, runtime, result) {
         return;
     }
 
+    if (!runtime.codeSandboxEnabled) {
+        result.unsupported.push({ type: 'triggercode', reason: 'code-sandbox-disabled', trigger: trigger.comment });
+        return;
+    }
+
     const api = createRisuScriptApi(effect, trigger, runtime, result);
     try {
-        const runner = new Function(
-            'api',
-            'scylla',
-            'risu',
-            'getChatVar',
-            'setChatVar',
-            'getGlobalVar',
-            'stopChat',
-            'getChatMain',
-            'getFullChatMain',
-            'setFullChatMain',
-            'getChatLength',
-            'setChat',
-            'setChatRole',
-            'insertChat',
-            'removeChat',
-            'cutChat',
-            'addChat',
-            'logMain',
-            'cbs',
-            'hash',
-            'getTokens',
-            'sleep',
-            'LLMMain',
-            'simpleLLM',
-            'generateImage',
-            'similarity',
-            'request',
-            'getCharacterLastMessage',
-            'getUserLastMessage',
-            'getName',
-            'setName',
-            'getDescription',
-            'setDescription',
-            'getCharacterFirstMessage',
-            'setCharacterFirstMessage',
-            'getPersonaName',
-            'getPersonaDescription',
-            'getAuthorsNote',
-            'getBackgroundEmbedding',
-            'setBackgroundEmbedding',
-            'alertNormal',
-            'alertError',
-            'alertInput',
-            'alertSelect',
-            'alertConfirm',
-            'reloadDisplay',
-            'reloadChat',
-            'getLoreBooksMain',
-            'loadLoreBooksMain',
-            'upsertLocalLoreBook',
-            'getCharacterImageMain',
-            'getPersonaImageMain',
-            'window',
-            'document',
-            'globalThis',
-            'fetch',
-            'XMLHttpRequest',
-            'localStorage',
-            'sessionStorage',
-            'indexedDB',
-            'Function',
-            `"use strict"; return (async () => {\n${code}\n})()`,
-        );
-        await runner(
-            api,
-            api.scylla,
-            api.risu,
-            api.getChatVar,
-            api.setChatVar,
-            api.getGlobalVar,
-            api.stopChat,
-            api.getChatMain,
-            api.getFullChatMain,
-            api.setFullChatMain,
-            api.getChatLength,
-            api.setChat,
-            api.setChatRole,
-            api.insertChat,
-            api.removeChat,
-            api.cutChat,
-            api.addChat,
-            api.logMain,
-            api.cbs,
-            api.hash,
-            api.getTokens,
-            api.sleep,
-            api.LLMMain,
-            api.simpleLLM,
-            api.generateImage,
-            api.similarity,
-            api.request,
-            api.getCharacterLastMessage,
-            api.getUserLastMessage,
-            api.getName,
-            api.setName,
-            api.getDescription,
-            api.setDescription,
-            api.getCharacterFirstMessage,
-            api.setCharacterFirstMessage,
-            api.getPersonaName,
-            api.getPersonaDescription,
-            api.getAuthorsNote,
-            api.getBackgroundEmbedding,
-            api.setBackgroundEmbedding,
-            api.alertNormal,
-            api.alertError,
-            api.alertInput,
-            api.alertSelect,
-            api.alertConfirm,
-            api.reloadDisplay,
-            api.reloadChat,
-            api.getLoreBooksMain,
-            api.loadLoreBooksMain,
-            api.upsertLocalLoreBook,
-            api.getCharacterImageMain,
-            api.getPersonaImageMain,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-        );
+        const outcome = await runSandboxedRisuTriggerCode({ code, api, trigger: trigger.comment });
+        if (outcome?.error) {
+            result.unsupported.push({ type: 'triggercode', reason: 'script-error', message: outcome.error, trigger: trigger.comment });
+        }
+        if (outcome?.stopSending) {
+            result.stopSending = true;
+            result.stopped = true;
+        }
     } catch (error) {
         result.unsupported.push({ type: 'triggercode', reason: 'script-error', message: error?.message ?? String(error), trigger: trigger.comment });
     }
@@ -1117,6 +1054,11 @@ async function runRisuTriggerLua(effect, trigger, runtime, result) {
         return;
     }
 
+    if (!runtime.codeSandboxEnabled) {
+        result.unsupported.push({ type: 'triggerlua', reason: 'code-sandbox-disabled', trigger: trigger.comment });
+        return;
+    }
+
     const mode = getRisuLuaTriggerMode(trigger);
     const luaRuntime = await loadRisuLuaRuntime();
     if (luaRuntime?.runRisuLuaScript) {
@@ -1144,6 +1086,11 @@ async function runRisuTriggerLua(effect, trigger, runtime, result) {
 }
 
 async function runRisuLuaButtonRuntime(triggers, functionName, runtime, result) {
+    if (!runtime.codeSandboxEnabled) {
+        result.unsupported.push({ type: 'triggerlua', reason: 'code-sandbox-disabled', trigger: functionName });
+        return false;
+    }
+
     const luaRuntime = await loadRisuLuaRuntime();
     if (!luaRuntime?.runRisuLuaButton) {
         return false;
@@ -1264,6 +1211,12 @@ async function modifyTriggerMessage(index, value, runtime, result) {
     const records = getMessageRecords(runtime);
     const targetIndex = normaliseIndex(index, records.length);
     if (targetIndex < 0 || targetIndex >= records.length) {
+        return;
+    }
+
+    if (normaliseMessage(records[targetIndex]) === toText(value)) {
+        result.displayChanged = true;
+        result.refresh = true;
         return;
     }
 
@@ -2065,6 +2018,11 @@ async function executeRisuLuaFunctionBody(body, runtime, result, functions, env 
 }
 
 async function runRisuLuaButtonShim(triggers, functionName, runtime, result) {
+    if (!runtime.codeSandboxEnabled) {
+        result.unsupported.push({ type: 'triggerlua', reason: 'code-sandbox-disabled', trigger: functionName });
+        return false;
+    }
+
     for (const trigger of triggers) {
         const effects = Array.isArray(trigger?.effect) ? trigger.effect : [];
         for (const effect of effects) {
@@ -2105,6 +2063,10 @@ function isLuaFunctionLibraryOnly(code) {
 }
 
 async function applyEffect(effect, trigger, triggers, runtime, result, state) {
+    if (shouldSkipEffectForPermissions(effect, trigger, runtime, result)) {
+        return;
+    }
+
     switch (effect.type) {
         case 'setvar': {
             const varKey = await evaluateText(effect.var, runtime, { source: 'effect-var' });
@@ -2159,8 +2121,9 @@ async function applyEffect(effect, trigger, triggers, runtime, result, state) {
                 }
             };
 
-            if (!trigger.lowLevelAccess) {
-                result.unsupported.push({ type: effect.type, reason: 'low-level-access-required', trigger: trigger.comment });
+            const lowLevelReason = getLowLevelAccessReason(trigger, runtime);
+            if (lowLevelReason) {
+                result.unsupported.push({ type: effect.type, reason: lowLevelReason, trigger: trigger.comment });
                 if (effect.type === 'v2ImgGen') {
                     await setOutput('null');
                 }
@@ -2204,8 +2167,9 @@ async function applyEffect(effect, trigger, triggers, runtime, result, state) {
                 }
             };
 
-            if (!trigger.lowLevelAccess) {
-                result.unsupported.push({ type: effect.type, reason: 'low-level-access-required', trigger: trigger.comment });
+            const lowLevelReason = getLowLevelAccessReason(trigger, runtime);
+            if (lowLevelReason) {
+                result.unsupported.push({ type: effect.type, reason: lowLevelReason, trigger: trigger.comment });
                 if (effect.type === 'v2CheckSimilarity') {
                     await setOutput('null');
                 }
@@ -2244,8 +2208,9 @@ async function applyEffect(effect, trigger, triggers, runtime, result, state) {
                 }
             };
 
-            if (!trigger.lowLevelAccess) {
-                result.unsupported.push({ type: effect.type, reason: 'low-level-access-required', trigger: trigger.comment });
+            const lowLevelReason = getLowLevelAccessReason(trigger, runtime);
+            if (lowLevelReason) {
+                result.unsupported.push({ type: effect.type, reason: lowLevelReason, trigger: trigger.comment });
                 if (effect.type === 'v2RunLLM') {
                     await setOutput('null');
                 }
@@ -2886,13 +2851,15 @@ async function applyEffect(effect, trigger, triggers, runtime, result, state) {
             result.stopSending = true;
             return;
         case 'sendAIprompt':
-        case 'v2SendAIprompt':
-            if (!trigger.lowLevelAccess) {
-                result.unsupported.push({ type: effect.type, reason: 'low-level-access-required', trigger: trigger.comment });
+        case 'v2SendAIprompt': {
+            const lowLevelReason = getLowLevelAccessReason(trigger, runtime);
+            if (lowLevelReason) {
+                result.unsupported.push({ type: effect.type, reason: lowLevelReason, trigger: trigger.comment });
                 return;
             }
             result.sendAIprompt = true;
             return;
+        }
         case 'triggerlua':
             await runRisuTriggerLua(effect, trigger, runtime, result);
             return;

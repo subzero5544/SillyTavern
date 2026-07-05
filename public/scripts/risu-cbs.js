@@ -16,7 +16,7 @@
  *  - side-effect-free helpers: string, array, JSON object, numeric, Unicode,
  *    and display-formatting helpers that do not mutate chat state
  *  - variables: getvar (chat variable → card defaultVariables → 'null')
- *  - context: role, chatindex, lastmessageid, assetlist, source::char/user
+ *  - context: role, chatindex, lastmessageid, screenwidth/screenheight, assetlist, source::char/user
  *  - math: {{? expr}} and {{calc::expr}} with $name chat variable references
  *  - {{// comment}} → removed
  *
@@ -44,7 +44,7 @@ const RISU_ST_MACROS = new Set([
     'all', 'any', 'min', 'max', 'sum', 'average', 'fixnum', 'fixnumber',
     'unicodeencode', 'unicodedecode', 'u', 'unicodedecodefromhex', 'ue', 'fromhex', 'tohex',
     'reverse', 'tex', 'latex', 'katex', 'ruby', 'furigana', 'comment', 'button',
-    'triggerid', 'role', 'chatindex', 'lastmessageid', 'lastmessageindex', 'assetlist', 'source', 'calc',
+    'triggerid', 'role', 'chatindex', 'lastmessageid', 'lastmessageindex', 'screenwidth', 'screenheight', 'assetlist', 'source', 'calc',
     'raw', 'path', 'img', 'emotion', 'inlay', 'inlayed', 'inlayeddata', 'image', 'video', 'videoimg', 'audio', 'asset', 'bg',
 ]);
 
@@ -55,6 +55,8 @@ const RISU_ST_MACROS = new Set([
  * @property {string} [defaultVariables] Card default variables ('key=value' lines)
  * @property {number} [chatIndex] Index of the message being rendered
  * @property {number} [lastMessageId] Index of the last message in the chat
+ * @property {number} [screenWidth] Current viewport width
+ * @property {number} [screenHeight] Current viewport height
  * @property {string} [role] 'char' or 'user'
  * @property {string[]} [assetNames] Additional asset names of the character
  * @property {string} [charAvatarUrl] Character avatar URL
@@ -322,6 +324,19 @@ function getListArgs(args) {
 function toNumber(value) {
     const number = Number(value);
     return isNaN(number) ? 0 : number;
+}
+
+function isNumericLike(value) {
+    const text = String(value ?? '').trim();
+    return text === '' || text.toLocaleLowerCase() === 'null' || /^[-+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text);
+}
+
+function compareRisuEqual(left, right) {
+    if (isNumericLike(left) && isNumericLike(right)) {
+        return toNumber(left) === toNumber(right);
+    }
+
+    return String(left ?? '') === String(right ?? '');
 }
 
 function isTruthy(value) {
@@ -780,17 +795,17 @@ function evaluateMacro(body, context) {
             return (value === undefined || value === null || String(value) === '') ? 'null' : String(value);
         }
         case 'equal':
-            return args[0] === args[1] ? '1' : '0';
+            return compareRisuEqual(args[0], args[1]) ? '1' : '0';
         case 'notequal':
-            return args[0] !== args[1] ? '1' : '0';
+            return compareRisuEqual(args[0], args[1]) ? '0' : '1';
         case 'greater':
-            return Number(args[0]) > Number(args[1]) ? '1' : '0';
+            return toNumber(args[0]) > toNumber(args[1]) ? '1' : '0';
         case 'less':
-            return Number(args[0]) < Number(args[1]) ? '1' : '0';
+            return toNumber(args[0]) < toNumber(args[1]) ? '1' : '0';
         case 'greaterequal':
-            return Number(args[0]) >= Number(args[1]) ? '1' : '0';
+            return toNumber(args[0]) >= toNumber(args[1]) ? '1' : '0';
         case 'lessequal':
-            return Number(args[0]) <= Number(args[1]) ? '1' : '0';
+            return toNumber(args[0]) <= toNumber(args[1]) ? '1' : '0';
         case 'and':
             return args[0] === '1' && args[1] === '1' ? '1' : '0';
         case 'or':
@@ -970,6 +985,10 @@ function evaluateMacro(body, context) {
         case 'lastmessageid':
         case 'lastmessageindex':
             return context.lastMessageId !== undefined ? String(context.lastMessageId) : '';
+        case 'screenwidth':
+            return context.screenWidth !== undefined ? String(context.screenWidth) : '1024';
+        case 'screenheight':
+            return context.screenHeight !== undefined ? String(context.screenHeight) : '768';
         case 'assetlist':
             return JSON.stringify(context.assetNames ?? []);
         case 'source': {

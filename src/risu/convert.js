@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 
+import { evaluateRisuCbs } from '../../public/scripts/risu-cbs.js';
+
 /**
  * Conversions from RisuAI card data to SillyTavern-native structures.
  */
@@ -7,8 +9,8 @@ import crypto from 'node:crypto';
 // SillyTavern regex script placements (public/scripts/extensions/regex/engine.js)
 const PLACEMENT_USER_INPUT = 1;
 const PLACEMENT_AI_OUTPUT = 2;
-const SUPPORTED_RISU_ACTION_FLAGS = new Set(['no_end_nl']);
-const UNSUPPORTED_RISU_ACTION_FLAGS = new Set(['cbs', 'inject', 'move_top', 'move_bottom', 'repeat_back']);
+const SUPPORTED_RISU_ACTION_FLAGS = new Set(['no_end_nl', 'cbs']);
+const UNSUPPORTED_RISU_ACTION_FLAGS = new Set(['inject', 'move_top', 'move_bottom', 'repeat_back']);
 
 /**
  * Maps a RisuAI script mode to SillyTavern regex script placement/flags.
@@ -70,6 +72,52 @@ function parseRisuScriptFlagMetadata(script) {
         order,
         hasUnsupportedAction,
     };
+}
+
+function canRegexMatchEmpty(pattern, flags = '') {
+    try {
+        const safeFlags = flags.replace(/[gy]/g, '');
+        const match = new RegExp(pattern, safeFlags).exec('');
+        return !!match && match[0] === '';
+    } catch {
+        return false;
+    }
+}
+
+function getRisuCbsRegexPattern(source, card, flags) {
+    const defaultVariables = card?.data?.extensions?.risuai?.defaultVariables;
+    const contexts = [
+        { lastMessageId: -1, chatIndex: 0, role: 'char', defaultVariables },
+        { lastMessageId: 0, chatIndex: 0, role: 'char', defaultVariables },
+    ];
+    const variants = [];
+
+    for (const context of contexts) {
+        const value = evaluateRisuCbs(source, context).trim();
+        if (value && !variants.includes(value)) {
+            variants.push(value);
+        }
+    }
+
+    if (variants.length === 0) {
+        return { pattern: '', hasZeroLengthVariant: false };
+    }
+
+    if (variants.length === 1) {
+        return {
+            pattern: variants[0],
+            hasZeroLengthVariant: canRegexMatchEmpty(variants[0], flags),
+        };
+    }
+
+    return {
+        pattern: variants.map(value => `(?:${value})`).join('|'),
+        hasZeroLengthVariant: variants.some(value => canRegexMatchEmpty(value, flags)),
+    };
+}
+
+function formatRegexScriptSource(pattern, flags) {
+    return `/${String(pattern).replaceAll('/', '\\/')}/${flags}`;
 }
 
 /**
@@ -187,9 +235,9 @@ export function applyRisuAssetMap(card, files) {
  * run in SillyTavern. The original customScripts are left in place for
  * round-trip export fidelity.
  *
- * Scripts using RisuAI-only features (CBS/action flags, '@@' output commands)
- * are skipped: they have no SillyTavern equivalent and converting them would
- * inject broken replacements.
+ * Scripts using RisuAI-only features ('@@' output commands and runtime-only
+ * action flags) are skipped: they have no SillyTavern equivalent and
+ * converting them would inject broken replacements.
  * @param {object} card Card data (CCv2/CCv3, mutated in place)
  * @returns {void}
  */
@@ -221,6 +269,25 @@ export function convertRisuCustomScripts(card) {
             }
 
             const flagMetadata = parseRisuScriptFlagMetadata(script);
+            const cbsPattern = flagMetadata.actions.includes('cbs')
+                ? getRisuCbsRegexPattern(script.in, card, flagMetadata.flags)
+                : null;
+            const findPattern = cbsPattern?.pattern ?? script.in;
+            const flags = cbsPattern?.hasZeroLengthVariant
+                ? (flagMetadata.flags.replace('g', '') || 'u')
+                : flagMetadata.flags;
+
+            if (!findPattern) {
+                skipped++;
+                continue;
+            }
+
+            try {
+                new RegExp(findPattern, flags);
+            } catch {
+                skipped++;
+                continue;
+            }
 
             // '$n' is RisuAI shorthand for a newline in the output
             let replaceString = script.out.replaceAll('$n', '\n').replaceAll(/{{data}}/g, '{{match}}');
@@ -242,7 +309,7 @@ export function convertRisuCustomScripts(card) {
                 risuOrder: flagMetadata.order,
                 id: crypto.randomUUID(),
                 scriptName: script.comment || `RisuAI script ${converted.length + 1}`,
-                findRegex: `/${script.in}/${flagMetadata.flags}`,
+                findRegex: formatRegexScriptSource(findPattern, flags),
                 replaceString: replaceString,
                 trimStrings: [],
                 placement: typeMapping.placement,

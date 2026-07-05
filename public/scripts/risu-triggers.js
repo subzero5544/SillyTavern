@@ -31,6 +31,7 @@ import { executeSlashCommandsWithOptions } from './slash-commands.js';
 import { getTokenCount } from './tokenizers.js';
 import { getLocalVariable, setLocalVariable } from './variables.js';
 import { runRisuManualTrigger, runRisuTriggerMode } from './risu-trigger-engine.js';
+import { isRisuCodeNetworkEnabled, isRisuCodeSandboxEnabled, isRisuDeclarativeTriggersEnabled } from './risu-trigger-settings.js';
 
 let initialized = false;
 let isRunningTrigger = false;
@@ -475,6 +476,9 @@ function applyRisuSystemPrompts(systemPrompt) {
 
 function createRisuTriggerRuntime(character, triggerId) {
     return {
+        declarativeTriggersEnabled: isRisuDeclarativeTriggersEnabled(character),
+        codeSandboxEnabled: isRisuCodeSandboxEnabled(character),
+        codeNetworkEnabled: isRisuCodeNetworkEnabled(character),
         defaultVariables: character?.data?.extensions?.risuai?.defaultVariables,
         messages: chat,
         getVariable: (name) => getLocalVariable(name),
@@ -540,13 +544,14 @@ async function applyRisuTriggerResult(result, triggerName, { render = true } = {
 
     const shouldSaveChat = result.changed || result.chatChanged || result.metadataChanged;
     const shouldRefresh = shouldSaveChat || result.refresh || result.promptChanged || result.characterChanged || result.settingsChanged;
+    const shouldPreserveScroll = !result.chatChanged && result.chatRefreshIndexes.length === 0;
 
     if (shouldSaveChat) {
         await saveChatConditional();
     }
 
     if (render && shouldRefresh) {
-        await printMessages();
+        await printMessages({ preserveScroll: shouldPreserveScroll });
         refreshRisuBackgroundHtml();
     }
 }
