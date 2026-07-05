@@ -5636,24 +5636,182 @@ function convertAgnaiMemoryBook(inputObj) {
     return outputObj;
 }
 
+/**
+ * Parses RisuAI/CCv3 decorators (leading '@@name value' lines) from lorebook
+ * entry content and maps them to ST world info entry fields.
+ * ST's scanner strips decorator lines from the prompt at runtime, but ignores
+ * their effects; this applies them at import time instead.
+ * '@@activate' / '@@dont_activate' are kept in the content (handled at scan time).
+ * @param {string} content Entry content
+ * @returns {{fields: object, content: string}} Mapped entry fields and content without decorator lines
+ */
+function parseRisuDecoratorFields(content) {
+    /** @type {object} */
+    const fields = {};
+
+    if (typeof content !== 'string' || !content.startsWith('@@')) {
+        return { fields, content };
+    }
+
+    const lines = content.split('\n');
+    const keptDecorators = [];
+    /** @type {string[][]} */
+    const additionalKeyLines = [];
+    /** @type {string[][]} */
+    const excludeKeyLines = [];
+    let excludeAll = false;
+    const roleMap = { system: extension_prompt_roles.SYSTEM, user: extension_prompt_roles.USER, assistant: extension_prompt_roles.ASSISTANT };
+    const toInt = (value) => Number.isFinite(parseInt(value)) ? parseInt(value) : null;
+    const toKeys = (value) => value.split(',').map(x => x.trim()).filter(Boolean);
+
+    let index = 0;
+    for (; index < lines.length; index++) {
+        const line = lines[index].trim();
+        if (!line.startsWith('@@')) {
+            break;
+        }
+
+        // '@@@' is the CCv3 fallback prefix - treat it the same as '@@'
+        const stripped = line.replace(/^@@@?/, '');
+        const spaceIndex = stripped.search(/\s/);
+        const name = spaceIndex === -1 ? stripped : stripped.slice(0, spaceIndex);
+        const value = spaceIndex === -1 ? '' : stripped.slice(spaceIndex + 1).trim();
+
+        switch (name) {
+            case 'activate':
+            case 'dont_activate':
+                keptDecorators.push(`@@${name}`);
+                break;
+            case 'probability': {
+                const probability = toInt(value);
+                if (probability !== null) {
+                    fields.probability = Math.min(100, Math.max(0, probability));
+                    fields.useProbability = true;
+                }
+                break;
+            }
+            case 'depth': {
+                const depth = toInt(value);
+                if (depth !== null) {
+                    fields.position = world_info_position.atDepth;
+                    fields.depth = depth;
+                }
+                break;
+            }
+            case 'role':
+                if (value in roleMap) {
+                    fields.role = roleMap[value];
+                }
+                break;
+            case 'scan_depth': {
+                const scanDepth = toInt(value);
+                if (scanDepth !== null) {
+                    fields.scanDepth = Math.min(MAX_SCAN_DEPTH, Math.max(0, scanDepth));
+                }
+                break;
+            }
+            case 'activate_only_after': {
+                const delay = toInt(value);
+                if (delay !== null) {
+                    fields.delay = delay;
+                }
+                break;
+            }
+            case 'activate_only_every': {
+                // Approximation: ST cooldown blocks reactivation for N messages
+                const cooldown = toInt(value);
+                if (cooldown !== null && cooldown > 1) {
+                    fields.cooldown = cooldown;
+                }
+                break;
+            }
+            case 'match_full_word':
+                fields.matchWholeWords = true;
+                break;
+            case 'match_partial_word':
+                fields.matchWholeWords = false;
+                break;
+            case 'additional_keys':
+                additionalKeyLines.push(toKeys(value));
+                break;
+            case 'exclude_keys':
+                excludeKeyLines.push(toKeys(value));
+                break;
+            case 'exclude_keys_all':
+                excludeAll = true;
+                excludeKeyLines.push(toKeys(value));
+                break;
+            case 'position':
+                // Only the description-relative values have ST equivalents
+                if (value === 'before_desc') {
+                    fields.position = world_info_position.before;
+                } else if (value === 'after_desc') {
+                    fields.position = world_info_position.after;
+                }
+                break;
+            default:
+                // No ST equivalent - drop the line (RisuAI also removes decorator lines from the prompt)
+                break;
+        }
+    }
+
+    // RisuAI emits one decorator line per key for ALL-type logic, and a single
+    // comma-separated line for ANY-type logic (see RisuAI convertCharbook)
+    if (additionalKeyLines.flat().length > 0) {
+        fields.keysecondary = additionalKeyLines.flat();
+        fields.selective = true;
+        fields.selectiveLogic = additionalKeyLines.length > 1 ? world_info_logic.AND_ALL : world_info_logic.AND_ANY;
+    } else if (excludeKeyLines.flat().length > 0) {
+        fields.keysecondary = excludeKeyLines.flat();
+        fields.selective = true;
+        fields.selectiveLogic = excludeAll ? world_info_logic.NOT_ALL : world_info_logic.NOT_ANY;
+    }
+
+    const remainder = lines.slice(index).join('\n');
+    const newContent = keptDecorators.length > 0
+        ? `${keptDecorators.join('\n')}\n${remainder}`
+        : remainder;
+
+    return { fields, content: newContent };
+}
+
+/**
+ * Converts a RisuAI regex key to ST format if needed.
+ * RisuAI stores the whole key field as one regex source string when useRegex is set;
+ * ST treats keys wrapped in slashes as regex.
+ * @param {string} key RisuAI key field (comma-separated keys, or a regex source)
+ * @param {boolean} useRegex Whether the entry uses regex matching
+ * @returns {string[]} ST key array
+ */
+function convertRisuKeys(key, useRegex) {
+    const keyString = String(key ?? '');
+    if (useRegex) {
+        return [keyString.startsWith('/') ? keyString : `/${keyString}/`];
+    }
+    return keyString.split(',').map(x => x.trim()).filter(Boolean);
+}
+
 function convertRisuLorebook(inputObj) {
     const outputObj = { entries: {} };
 
     inputObj.data.forEach((entry, index) => {
+        const { fields: decoratorFields, content } = parseRisuDecoratorFields(entry.content);
+
         outputObj.entries[index] = {
             ...newWorldInfoEntryTemplate,
             uid: index,
-            key: entry.key.split(',').map(x => x.trim()),
-            keysecondary: entry.secondkey ? entry.secondkey.split(',').map(x => x.trim()) : [],
+            key: convertRisuKeys(entry.key, entry.useRegex),
+            keysecondary: entry.secondkey ? entry.secondkey.split(',').map(x => x.trim()).filter(Boolean) : [],
             comment: entry.comment,
-            content: entry.content,
-            constant: entry.alwaysActive,
+            content: content,
+            constant: entry.alwaysActive || entry.mode === 'constant',
             selective: entry.selective,
             vectorized: false,
             selectiveLogic: world_info_logic.AND_ANY,
             order: entry.insertorder,
             position: world_info_position.before,
-            disable: false,
+            // 'folder' entries are organizational containers, not real entries
+            disable: entry.mode === 'folder',
             addMemo: true,
             excludeRecursion: false,
             delayUntilRecursion: false,
@@ -5665,7 +5823,7 @@ function convertRisuLorebook(inputObj) {
             groupOverride: false,
             groupWeight: DEFAULT_WEIGHT,
             scanDepth: null,
-            caseSensitive: null,
+            caseSensitive: entry.extentions?.risu_case_sensitive ?? null,
             matchWholeWords: null,
             useGroupScoring: null,
             automationId: '',
@@ -5676,6 +5834,7 @@ function convertRisuLorebook(inputObj) {
             triggers: [],
             ignoreBudget: false,
             repeatOnMatch: false,
+            ...decoratorFields,
         };
     });
 
@@ -5736,30 +5895,37 @@ function convertNovelLorebook(inputObj) {
 export function convertCharacterBook(characterBook) {
     const result = { entries: {}, originalData: characterBook };
 
+    // RisuAI book-level whole-word matching default
+    const risuFullWordMatching = characterBook.extensions?.risu_fullWordMatching === true ? true : null;
+
     characterBook.entries.forEach((entry, index) => {
         // Not in the spec, but this is needed to find the entry in the original data
         if (entry.id === undefined) {
             entry.id = index;
         }
 
+        // CCv3/RisuAI decorators ('@@depth 4' etc.) at the start of the content
+        const { fields: decoratorFields, content } = parseRisuDecoratorFields(entry.content);
+
         result.entries[entry.id] = {
             ...newWorldInfoEntryTemplate,
             uid: entry.id,
-            key: entry.keys,
+            key: entry.use_regex && entry.keys?.length ? convertRisuKeys(entry.keys[0], true) : entry.keys,
             keysecondary: entry.secondary_keys || [],
-            comment: entry.comment || '',
-            content: entry.content,
-            constant: entry.constant || false,
+            comment: entry.comment || entry.name || '',
+            content: content,
+            constant: entry.constant || entry.mode === 'constant' || false,
             selective: entry.selective || false,
             order: entry.insertion_order,
             position: entry.extensions?.position ?? (entry.position === 'before_char' ? world_info_position.before : world_info_position.after),
             excludeRecursion: entry.extensions?.exclude_recursion ?? false,
             preventRecursion: entry.extensions?.prevent_recursion ?? false,
             delayUntilRecursion: entry.extensions?.delay_until_recursion ?? false,
-            disable: !entry.enabled,
+            // RisuAI 'folder' entries are organizational containers, not real entries
+            disable: !entry.enabled || entry.mode === 'folder',
             addMemo: !!entry.comment,
             displayIndex: entry.extensions?.display_index ?? index,
-            probability: entry.extensions?.probability ?? 100,
+            probability: entry.extensions?.probability ?? entry.extensions?.risu_activationPercent ?? 100,
             useProbability: entry.extensions?.useProbability ?? true,
             depth: entry.extensions?.depth ?? DEFAULT_DEPTH,
             selectiveLogic: entry.extensions?.selectiveLogic ?? world_info_logic.AND_ANY,
@@ -5768,8 +5934,8 @@ export function convertCharacterBook(characterBook) {
             groupOverride: entry.extensions?.group_override ?? false,
             groupWeight: entry.extensions?.group_weight ?? DEFAULT_WEIGHT,
             scanDepth: entry.extensions?.scan_depth ?? null,
-            caseSensitive: entry.extensions?.case_sensitive ?? null,
-            matchWholeWords: entry.extensions?.match_whole_words ?? null,
+            caseSensitive: entry.extensions?.case_sensitive ?? entry.case_sensitive ?? entry.extensions?.risu_case_sensitive ?? null,
+            matchWholeWords: entry.extensions?.match_whole_words ?? risuFullWordMatching,
             useGroupScoring: entry.extensions?.use_group_scoring ?? null,
             automationId: entry.extensions?.automation_id ?? '',
             role: entry.extensions?.role ?? extension_prompt_roles.SYSTEM,
@@ -5787,6 +5953,7 @@ export function convertCharacterBook(characterBook) {
             triggers: entry.extensions?.triggers || [],
             ignoreBudget: entry.extensions?.ignore_budget ?? false,
             repeatOnMatch: entry.extensions?.repeat_on_match ?? false,
+            ...decoratorFields,
         };
     });
 

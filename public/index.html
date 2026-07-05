@@ -6438,10 +6438,10 @@
                     </div>
                     <div id="rm_character_import" class="right_menu" style="display: none;">
                         <form id="form_import" action="javascript:void(null);" method="post" enctype="multipart/form-data">
-                            <input multiple type="file" id="character_import_file" accept=".json, image/png, .yaml, .yml, .charx, .byaf" name="avatar">
+                            <input multiple type="file" id="character_import_file" accept=".json, image/png, .yaml, .yml, .charx, .jpg, .jpeg, .byaf" name="avatar">
                             <input id="character_import_file_type" name="file_type" class="text_pole" value="" autocomplete="off">
                         </form>
-                        <input type="file" id="character_replace_file" accept=".json, image/png, .yaml, .yml, .charx, .byaf" name="replace_avatar" hidden>
+                        <input type="file" id="character_replace_file" accept=".json, image/png, .yaml, .yml, .charx, .jpg, .jpeg, .byaf" name="replace_avatar" hidden>
                     </div>
                     <div name="Character List Panel" id="rm_characters_block" class="right_menu">
                         <div id="charListFixedTop">
@@ -6498,6 +6498,7 @@
         <div id="export_format_popup" class="list-group">
             <div class="export_format list-group-item" data-format="png">PNG</div>
             <div class="export_format list-group-item" data-format="json">JSON</div>
+            <div class="export_format list-group-item" data-format="charx">CharX (RisuAI)</div>
         </div>
         <div id="zoomed_avatar_template" class="template_element">
             <div class="zoomed_avatar">

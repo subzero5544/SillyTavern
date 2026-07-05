@@ -1222,6 +1222,44 @@ async function queryMultipleCollections(collectionIds, searchText, topK, thresho
 }
 
 /**
+ * Ranks arbitrary text candidates against a query using the configured vector source.
+ * @param {string} searchText Text to query with
+ * @param {string[]} candidates Candidate texts to rank
+ * @returns {Promise<string[]>} Candidates sorted by descending vector similarity
+ */
+export async function rankTextsByVectorSimilarity(searchText, candidates) {
+    const items = Array.isArray(candidates)
+        ? candidates.map((text, index) => ({ text: String(text ?? ''), index })).filter(item => item.text)
+        : [];
+
+    if (!items.length) {
+        return [];
+    }
+
+    throwIfSourceInvalid();
+
+    const args = await getAdditionalArgs([String(searchText ?? ''), ...items.map(item => item.text)]);
+    const response = await fetch('/api/vector/rank', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            ...getVectorsRequestBody(args),
+            searchText: String(searchText ?? ''),
+            items,
+            source: settings.source,
+        }),
+    });
+
+    if (!response.ok) {
+        throw new Error('Failed to rank text candidates by vector similarity');
+    }
+
+    const data = await response.json();
+    const ranked = Array.isArray(data?.items) ? data.items : [];
+    return ranked.map(item => String(item.text ?? '')).filter(Boolean);
+}
+
+/**
  * Purges the vector index for a file.
  * @param {string} fileUrl File URL to purge
  */

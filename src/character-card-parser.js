@@ -5,21 +5,30 @@ import encode from './png/encode.js';
 import extract from 'png-chunks-extract';
 import PNGtext from 'png-chunk-text';
 
+// RisuAI PNG exports store binary assets in one tEXt chunk each, keyed
+// 'chara-ext-asset_:<index>' (legacy: 'chara-ext-asset_<index>'), referenced
+// from the card JSON as '__asset:<index>'.
+const RISU_ASSET_CHUNK_PREFIX = 'chara-ext-asset_';
+
 /**
  * Writes Character metadata to a PNG image buffer.
- * Writes only 'chara', 'ccv3' is not supported and removed not to create a mismatch.
+ * Writes both 'chara' (V2) and 'ccv3' (V3) chunks.
+ * Strips RisuAI 'chara-ext-asset_' chunks: their contents are persisted to disk
+ * at import time, so keeping them would only bloat the avatar file.
  * @param {Buffer} image PNG image buffer
  * @param {string} data Character data to write
+ * @param {Map<string, Buffer>} [assetChunks] Optional RisuAI asset chunks to write for portable export
  * @returns {Buffer} PNG image buffer with metadata
  */
-export const write = (image, data) => {
+export const write = (image, data, assetChunks = new Map()) => {
     const chunks = extract(new Uint8Array(image));
     const tEXtChunks = chunks.filter(chunk => chunk.name === 'tEXt');
 
     // Remove existing tEXt chunks
     for (const tEXtChunk of tEXtChunks) {
         const data = PNGtext.decode(tEXtChunk.data);
-        if (data.keyword.toLowerCase() === 'chara' || data.keyword.toLowerCase() === 'ccv3') {
+        const keyword = data.keyword.toLowerCase();
+        if (keyword === 'chara' || keyword === 'ccv3' || keyword.startsWith(RISU_ASSET_CHUNK_PREFIX)) {
             chunks.splice(chunks.indexOf(tEXtChunk), 1);
         }
     }
@@ -39,6 +48,15 @@ export const write = (image, data) => {
         chunks.splice(-1, 0, PNGtext.encode('ccv3', base64EncodedData));
     } catch (error) {
         // Ignore errors when adding v3 chunk
+    }
+
+    if (assetChunks instanceof Map) {
+        for (const [index, buffer] of assetChunks) {
+            if (!index || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+                continue;
+            }
+            chunks.splice(-1, 0, PNGtext.encode(`${RISU_ASSET_CHUNK_PREFIX}:${index}`, buffer.toString('base64')));
+        }
     }
 
     const newBuffer = Buffer.from(encode(chunks));
@@ -75,6 +93,46 @@ export const read = (image) => {
 
     console.error('PNG metadata does not contain any character data.');
     throw new Error('No PNG metadata.');
+};
+
+/**
+ * Reads RisuAI asset chunks ('chara-ext-asset_:N' / 'chara-ext-asset_N') from a PNG image buffer.
+ * @param {Buffer} image PNG image buffer
+ * @returns {Map<string, Buffer>} Map of asset index (as string) to decoded binary data
+ */
+export const readAssetChunks = (image) => {
+    /** @type {Map<string, Buffer>} */
+    const assets = new Map();
+
+    try {
+        const chunks = extract(new Uint8Array(image));
+
+        for (const chunk of chunks) {
+            if (chunk.name !== 'tEXt') {
+                continue;
+            }
+
+            const decoded = PNGtext.decode(chunk.data);
+            const keyword = decoded.keyword.toLowerCase();
+
+            if (!keyword.startsWith(RISU_ASSET_CHUNK_PREFIX)) {
+                continue;
+            }
+
+            // Key formats: 'chara-ext-asset_:0' (current) or 'chara-ext-asset_0' (legacy)
+            const index = decoded.keyword.slice(RISU_ASSET_CHUNK_PREFIX.length).replace(/^:/, '').trim();
+
+            if (!index || assets.has(index)) {
+                continue;
+            }
+
+            assets.set(index, Buffer.from(decoded.text, 'base64'));
+        }
+    } catch (error) {
+        console.warn('Failed to read RisuAI asset chunks from PNG:', error.message);
+    }
+
+    return assets;
 };
 
 /**

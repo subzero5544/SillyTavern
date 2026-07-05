@@ -254,6 +254,11 @@ import { initTextGenModels } from './scripts/textgen-models.js';
 import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, decodeStyleTags, encodeStyleTags, isExternalMediaAllowed, preserveNeutralChat, restoreNeutralChat, formatCreatorNotes, initChatUtilities, addDOMPurifyHooks } from './scripts/chats.js';
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
+import { renderRisuAssetMacros, getRisuAssetNames } from './scripts/risu-assets.js';
+import { evaluateRisuCbs, protectRisuCbsMacros } from './scripts/risu-cbs.js';
+import { applyRisuBackgroundHtml, RISU_SANITIZER_ATTRIBUTES } from './scripts/risu-background.js';
+import { initRisuTriggers } from './scripts/risu-triggers.js';
+import { getLocalVariable, getGlobalVariable } from './scripts/variables.js';
 import { currentUser, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
@@ -730,6 +735,8 @@ async function firstLoadInit() {
     initLibraryShims();
     addShowdownPatch(showdown);
     addDOMPurifyHooks();
+    initRisuBackgroundHtml();
+    initRisuTriggers();
     reloadMarkdownProcessor();
     applyBrowserFixes();
     await getClientVersion();
@@ -795,6 +802,77 @@ async function fixViewport() {
     document.body.style.position = 'absolute';
     await delay(1);
     document.body.style.position = '';
+}
+
+function mergeSanitizerAttributes(existingAttributes, additionalAttributes) {
+    if (typeof existingAttributes === 'function') {
+        return (attributeName, tagName) => additionalAttributes.includes(attributeName) || existingAttributes(attributeName, tagName);
+    }
+
+    return Array.from(new Set([
+        ...(Array.isArray(existingAttributes) ? existingAttributes : []),
+        ...additionalAttributes,
+    ]));
+}
+
+let currentRisuTriggerId = null;
+export function setCurrentRisuTriggerId(triggerId) {
+    currentRisuTriggerId = triggerId || null;
+}
+
+export function getRisuCbsContext(risuCharacter, { messageId, role = 'char' } = {}) {
+    const numericMessageId = Number(messageId);
+    return {
+        getVariable: (name) => getLocalVariable(name),
+        getGlobalVariable: (name) => getGlobalVariable(name),
+        defaultVariables: risuCharacter?.data?.extensions?.risuai?.defaultVariables,
+        chatIndex: Number.isFinite(numericMessageId) && numericMessageId >= 0 ? numericMessageId : undefined,
+        lastMessageId: chat.length - 1,
+        role,
+        assetNames: getRisuAssetNames(risuCharacter),
+        charAvatarUrl: risuCharacter?.avatar && risuCharacter.avatar !== 'none' ? encodeURI(`/characters/${risuCharacter.avatar}`) : '',
+        userAvatarUrl: user_avatar ? encodeURI(`/User Avatars/${user_avatar}`) : '',
+        triggerId: currentRisuTriggerId ?? undefined,
+    };
+}
+
+function hasRisuAiExtension(character) {
+    return Boolean(character?.data?.extensions?.risuai);
+}
+
+function getActiveRisuCharacterForMessage(chName) {
+    const activeCharacter = this_chid !== undefined ? characters[this_chid] : null;
+    if (hasRisuAiExtension(activeCharacter) && activeCharacter?.name === chName) {
+        return activeCharacter;
+    }
+
+    return characters.find(character => hasRisuAiExtension(character) && character.name === chName) ?? null;
+}
+
+function substituteParamsPreservingRisuCbs(content, ...args) {
+    const protectedRisu = protectRisuCbsMacros(content);
+    return protectedRisu.restore(substituteParams(protectedRisu.text, ...args));
+}
+
+export function refreshRisuBackgroundHtml() {
+    const risuCharacter = this_chid !== undefined ? characters[this_chid] : null;
+    applyRisuBackgroundHtml(risuCharacter, getRisuCbsContext(risuCharacter, {
+        messageId: chat.length - 1,
+        role: 'char',
+    }));
+}
+
+let risuBackgroundHtmlInitialized = false;
+function initRisuBackgroundHtml() {
+    if (risuBackgroundHtmlInitialized) {
+        return;
+    }
+
+    risuBackgroundHtmlInitialized = true;
+    eventSource.on(event_types.APP_READY, refreshRisuBackgroundHtml);
+    eventSource.on(event_types.CHAT_CHANGED, refreshRisuBackgroundHtml);
+    eventSource.on(event_types.CHARACTER_EDITED, refreshRisuBackgroundHtml);
+    eventSource.on(event_types.CHARACTER_DELETED, refreshRisuBackgroundHtml);
 }
 
 function initStandaloneMode() {
@@ -1777,12 +1855,16 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
     if (!mes) {
         return '';
     }
+    let allowRisuUi = false;
 
     if (Number(messageId) === 0 && !isSystem && !isUser && !isReasoning) {
         const mesBeforeReplace = mes;
         const chatMessage = chat[messageId];
-        mes = substituteParams(mes, undefined, ch_name);
-        if (chatMessage && chatMessage.mes === mesBeforeReplace && chatMessage.extra?.display_text !== mesBeforeReplace) {
+        const risuCharacter = getActiveRisuCharacterForMessage(ch_name);
+        mes = risuCharacter
+            ? substituteParamsPreservingRisuCbs(mes, undefined, ch_name)
+            : substituteParams(mes, undefined, ch_name);
+        if (!risuCharacter && chatMessage && chatMessage.mes === mesBeforeReplace && chatMessage.extra?.display_text !== mesBeforeReplace) {
             chatMessage.mes = mes;
         }
     }
@@ -1866,6 +1948,19 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
     });
 
     if (!isSystem) {
+        // For characters imported from RisuAI: evaluate CBS conditionals
+        // ({{#if ...}} blocks emitted by the card's display scripts), then
+        // render asset macros ({{img::name}} etc.)
+        const risuCharacter = characters[this_chid]?.name === ch_name ? characters[this_chid] : characters.find(x => x.name === ch_name);
+        if (risuCharacter?.data?.extensions?.risuai) {
+            allowRisuUi = true;
+            mes = evaluateRisuCbs(mes, getRisuCbsContext(risuCharacter, {
+                messageId,
+                role: isUser ? 'user' : 'char',
+            }));
+            mes = renderRisuAssetMacros(mes, risuCharacter);
+        }
+
         // Save double quotes in tags as a special character to prevent them from being encoded
         if (!power_user.encode_tags) {
             mes = mes.replace(/<([^>]+)>/g, function (_, contents) {
@@ -1939,6 +2034,9 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
         ADD_TAGS: ['custom-style'],
         ...sanitizerOverrides,
     };
+    if (allowRisuUi) {
+        config.ADD_ATTR = mergeSanitizerAttributes(config.ADD_ATTR, RISU_SANITIZER_ATTRIBUTES);
+    }
     mes = encodeStyleTags(mes);
     mes = DOMPurify.sanitize(mes, config);
     mes = decodeStyleTags(mes, { prefix: '.mes_text ' });
@@ -4477,7 +4575,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
     // First message in fresh 1-on-1 chat reacts to user/character settings changes
     if (chat.length) {
-        chat[0].mes = substituteParams(chat[0].mes);
+        chat[0].mes = hasRisuAiExtension(characters[this_chid])
+            ? substituteParamsPreservingRisuCbs(chat[0].mes)
+            : substituteParams(chat[0].mes);
     }
 
     // Collect messages with usable content
@@ -10791,7 +10891,7 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
     }
 
     const ext = file.name.match(/\.(\w+)$/);
-    if (!ext || !(['json', 'png', 'yaml', 'yml', 'charx', 'byaf'].includes(ext[1].toLowerCase()))) {
+    if (!ext || !(['json', 'png', 'yaml', 'yml', 'charx', 'jpg', 'jpeg', 'byaf'].includes(ext[1].toLowerCase()))) {
         return;
     }
 

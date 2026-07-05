@@ -6817,3 +6817,16 @@ body:not(.movingUI) .drawer-content.maximized {
         border-width: 2px;
     }
 }
+
+/* RisuAI inline assets ({{img::...}} and friends rendered in chat) */
+.mes_text .risu_inline_asset {
+    max-width: 100%;
+    max-height: 40vh;
+    border-radius: 5px;
+}
+
+.mes_text .risu-inlay-image {
+    display: flex;
+    justify-content: center;
+    margin: 5px 0;
+}

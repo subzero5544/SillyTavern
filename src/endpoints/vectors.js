@@ -437,6 +437,46 @@ async function multiQueryCollection(directories, collectionIds, source, sourceSe
     return groupedResults;
 }
 
+function dotProduct(left, right) {
+    const leftIsVector = Array.isArray(left) || ArrayBuffer.isView(left);
+    const rightIsVector = Array.isArray(right) || ArrayBuffer.isView(right);
+    if (!leftIsVector || !rightIsVector) {
+        return -Infinity;
+    }
+
+    const length = Math.min(left.length, right.length);
+    let score = 0;
+    for (let index = 0; index < length; index++) {
+        score += Number(left[index]) * Number(right[index]);
+    }
+    return score;
+}
+
+/**
+ * Ranks arbitrary text candidates against a query without persisting a vector index.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {string} source Vector source
+ * @param {Object} sourceSettings Source settings
+ * @param {string} searchText Query text
+ * @param {{ text: string, index: number }[]} items Candidate text records
+ * @returns {Promise<{ text: string, index: number, score: number }[]>}
+ */
+async function rankTextItems(directories, source, sourceSettings, searchText, items) {
+    if (!items.length) {
+        return [];
+    }
+
+    const queryVector = await getVector(source, sourceSettings, searchText, true, directories);
+    const itemVectors = await getBatchVector(source, sourceSettings, items.map(item => item.text), false, directories);
+
+    return items
+        .map((item, offset) => ({
+            ...item,
+            score: dotProduct(queryVector, itemVectors[offset]),
+        }))
+        .sort((left, right) => right.score - left.score || left.index - right.index);
+}
+
 /**
  * Performs a request to regenerate the index if it is corrupted.
  * @param {import('express').Request} req Express request object
@@ -506,6 +546,30 @@ router.post('/query-multi', async (req, res) => {
         return res.json(results);
     } catch (error) {
         return regenerateCorruptedIndexErrorHandler(req, res, error);
+    }
+});
+
+router.post('/rank', async (req, res) => {
+    try {
+        if (!req.body.searchText || !Array.isArray(req.body.items)) {
+            return res.sendStatus(400);
+        }
+
+        const searchText = String(req.body.searchText);
+        const items = req.body.items
+            .map((item, index) => ({
+                text: String(item?.text ?? item ?? ''),
+                index: Number.isInteger(Number(item?.index)) ? Number(item.index) : index,
+            }))
+            .filter(item => item.text);
+        const source = String(req.body.source) || 'transformers';
+        const sourceSettings = getSourceSettings(source, req);
+        const rankedItems = await rankTextItems(req.user.directories, source, sourceSettings, searchText, items);
+
+        return res.json({ items: rankedItems });
+    } catch (error) {
+        console.error(error);
+        return res.sendStatus(500);
     }
 });
 

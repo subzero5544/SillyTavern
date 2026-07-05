@@ -999,7 +999,8 @@ async function importTags(character, { importSetting = null } = {}) {
 async function handleTagImport(character, { importSetting = null } = {}) {
     /** @type {string[]} */
     const alreadyAssignedTags = tag_map[character.avatar] ?? [];
-    const importTags = character.tags.map(t => t.trim()).filter(t => t)
+    const characterTags = Array.isArray(character.tags) ? character.tags : [];
+    const importTags = characterTags.map(t => t.trim()).filter(t => t)
         .filter(t => !IMPORT_EXLCUDED_TAGS.includes(t))
         .filter(t => {
             const existingTag = getTag(t);

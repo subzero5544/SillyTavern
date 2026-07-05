@@ -16,14 +16,17 @@ import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.j
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, forbiddenRegExp } from '../middleware/validateFileName.js';
 import { deepMerge, humanizedDateTime, tryParse, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
-import { parse, read, write } from '../character-card-parser.js';
+import { parse, read, write, readAssetChunks } from '../character-card-parser.js';
 import { readWorldInfoFile } from './worldinfo.js';
 import { invalidateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
 import { getChatInfo } from './chats.js';
 import { ByafParser } from '../byaf.js';
-import { CharXParser, persistCharXAssets } from '../charx.js';
+import { CharXParser, persistCharXAssets, collectCharXAssets, collectCharXDataUriAssets, mapCharXAssetsForStorage } from '../charx.js';
+import { convertRisuCustomScripts, applyRisuAssetMap } from '../risu/convert.js';
+import { exportToCharX } from '../risu/charx-export.js';
+import { prepareRisuPngExport } from '../risu/png-export.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
@@ -524,9 +527,13 @@ function readFromV2(char) {
 
     _.forEach(fieldMappings, (v2Path, charField) => {
         //console.info(`Migrating field: ${charField} from ${v2Path}`);
-        const v2Value = _.get(char.data, v2Path);
+        let v2Value = _.get(char.data, v2Path);
         if (_.isUndefined(v2Value)) {
             let defaultValue = undefined;
+
+            if (['personality', 'scenario', 'mes_example'].includes(v2Path)) {
+                defaultValue = '';
+            }
 
             // Backfill default values for missing ST extension fields
             if (v2Path === 'extensions.talkativeness') {
@@ -537,9 +544,14 @@ function readFromV2(char) {
                 defaultValue = false;
             }
 
+            if (v2Path === 'tags') {
+                defaultValue = [];
+            }
+
             if (!_.isUndefined(defaultValue)) {
                 //console.warn(`Spec v2 extension data missing for field: ${charField}, using default value: ${defaultValue}`);
-                char[charField] = defaultValue;
+                v2Value = defaultValue;
+                _.set(char.data, v2Path, defaultValue);
             } else {
                 console.warn(`Char ${char.name} has Spec v2 data missing for unknown field: ${charField}`);
                 return;
@@ -776,6 +788,8 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
         card.data.name = sanitize(card.data.name);
     }
     card.name = sanitize(card.data?.name || card.name);
+    convertRisuCustomScripts(card);
+    importRisuSprites(request.user.directories, card, extractedBuffers);
     let processedCard = readFromV2(card);
     unsetPrivateFields(processedCard);
     processedCard.create_date = new Date().toISOString();
@@ -791,6 +805,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
             if (summary.sprites || summary.backgrounds || summary.misc) {
                 console.log(`CharX: Imported ${summary.sprites} sprite(s), ${summary.backgrounds} background(s), ${summary.misc} misc asset(s) for ${characterFolder}`);
             }
+            applyRisuAssetMap(processedCard, summary.files);
         } catch (error) {
             console.warn(`CharX: Failed to persist auxiliary assets for ${characterFolder}`, error);
         }
@@ -889,6 +904,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
     if (jsonData.spec !== undefined) {
         console.info(`Importing from ${jsonData.spec} json`);
         importRisuSprites(request.user.directories, jsonData);
+        convertRisuCustomScripts(jsonData);
         unsetPrivateFields(jsonData);
         if (jsonData.data?.name) {
             jsonData.data.name = sanitize(jsonData.data.name);
@@ -959,6 +975,50 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
 }
 
 /**
+ * Persists RisuAI V3 PNG assets (data.assets entries with '__asset:N' URIs) to disk.
+ * Reuses the CharX classification/persistence pipeline with PNG chunk indices as lookup keys.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {object} jsonData Card data (CCv3)
+ * @param {Map<string, Buffer>|null} assetBuffers PNG chunk assets keyed by index
+ * @returns {void}
+ */
+function importRisuPngCardAssets(directories, jsonData, assetBuffers) {
+    try {
+        if (!Array.isArray(jsonData.data?.assets)) {
+            return;
+        }
+
+        const characterFolder = sanitize(jsonData.data?.name || jsonData.name || '');
+        if (!characterFolder) {
+            return;
+        }
+
+        const dataUriAssets = collectCharXDataUriAssets(jsonData);
+        const bufferMap = new Map(assetBuffers ?? []);
+        for (const [key, buffer] of dataUriAssets.buffers) {
+            bufferMap.set(key, buffer);
+        }
+
+        if (bufferMap.size === 0) {
+            return;
+        }
+
+        const collected = [...collectCharXAssets(jsonData), ...dataUriAssets.assets];
+        const mapped = mapCharXAssetsForStorage(collected, bufferMap).filter(asset => bufferMap.has(asset.zipPath));
+
+        if (mapped.length === 0) {
+            return;
+        }
+
+        const summary = persistCharXAssets(mapped, bufferMap, directories, characterFolder);
+        console.info(`RisuAI PNG: Imported ${summary.sprites} sprite(s), ${summary.backgrounds} background(s), ${summary.misc} misc asset(s) for ${characterFolder}`);
+        applyRisuAssetMap(jsonData, summary.files);
+    } catch (error) {
+        console.warn('RisuAI PNG: Failed to persist card assets', error);
+    }
+}
+
+/**
  * Import a character from a PNG file.
  * @param {string} uploadPath Path to the uploaded file
  * @param {{ request: import('express').Request, response: import('express').Response }} context Express request and response objects
@@ -979,7 +1039,14 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
 
     if (jsonData.spec !== undefined) {
         console.info(`Found a ${jsonData.spec} character file.`);
-        importRisuSprites(request.user.directories, jsonData);
+        // RisuAI cards may reference binary assets stored in separate PNG chunks ('__asset:N')
+        let assetBuffers = null;
+        if (jsonData.data?.extensions?.risuai || Array.isArray(jsonData.data?.assets)) {
+            assetBuffers = readAssetChunks(fs.readFileSync(uploadPath));
+        }
+        importRisuSprites(request.user.directories, jsonData, assetBuffers);
+        importRisuPngCardAssets(request.user.directories, jsonData, assetBuffers);
+        convertRisuCustomScripts(jsonData);
         unsetPrivateFields(jsonData);
         jsonData = readFromV2(jsonData);
         jsonData.create_date = new Date().toISOString();
@@ -1568,6 +1635,9 @@ router.post('/import', async function (request, response) {
         'json': importFromJson,
         'png': importFromPng,
         'charx': importFromCharX,
+        // RisuAI "charx jpeg": a JPEG cover image with the CharX ZIP appended
+        'jpg': importFromCharX,
+        'jpeg': importFromCharX,
         'byaf': importFromByaf,
     };
 
@@ -1657,8 +1727,9 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
             case 'png': {
                 const rawBuffer = await fsPromises.readFile(filename);
                 const rawData = read(rawBuffer);
-                const mutatedData = mutateJsonString(rawData, unsetPrivateFields);
-                const mutatedBuffer = write(rawBuffer, mutatedData);
+                const prepared = prepareRisuPngExport(rawData, request.user.directories);
+                const mutatedData = mutateJsonString(prepared.data, unsetPrivateFields);
+                const mutatedBuffer = write(rawBuffer, mutatedData, prepared.assetChunks);
                 const contentType = mime.lookup(filename) || 'image/png';
                 response.setHeader('Content-Type', contentType);
                 response.setHeader('Content-Disposition', `attachment; filename="${encodeURI(path.basename(filename))}"`);
@@ -1674,6 +1745,17 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                 } catch {
                     return response.sendStatus(400);
                 }
+            }
+            case 'charx': {
+                const json = await readCharacterData(filename);
+                if (json === undefined) return response.sendStatus(400);
+                const jsonObject = getCharaCardV2(JSON.parse(json), request.user.directories);
+                unsetPrivateFields(jsonObject);
+                const avatarBuffer = await fsPromises.readFile(filename);
+                const charxBuffer = await exportToCharX(jsonObject, avatarBuffer, request.user.directories);
+                response.setHeader('Content-Type', 'application/octet-stream');
+                response.setHeader('Content-Disposition', `attachment; filename="${encodeURI(path.basename(filename, path.extname(filename)))}.charx"`);
+                return response.send(charxBuffer);
             }
         }
 

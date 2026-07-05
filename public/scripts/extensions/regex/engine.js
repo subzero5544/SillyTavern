@@ -1,6 +1,7 @@
 import { characters, saveSettingsDebounced, substituteParams, substituteParamsExtended, this_chid } from '../../../script.js';
 import { extension_settings, writeExtensionField } from '../../extensions.js';
 import { getPresetManager } from '../../preset-manager.js';
+import { protectRisuCbsMacros } from '../../risu-cbs.js';
 import { regexFromString } from '../../utils.js';
 import { lodash } from '../../../lib.js';
 
@@ -810,8 +811,10 @@ export function runRegexScript(regexScript, rawString, { characterOverride, getL
             return filteredMatch;
         });
 
-        // Substitute at the end
-        return substituteParams(replaceWithGroups);
+        // Substitute at the end, but keep RisuAI display macros for the Risu
+        // CBS evaluator that runs after display regex scripts.
+        const protectedRisu = protectRisuCbsMacros(replaceWithGroups);
+        return protectedRisu.restore(substituteParams(protectedRisu.text));
     });
 
     return newString;
