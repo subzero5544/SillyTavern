@@ -120,6 +120,22 @@ function formatRegexScriptSource(pattern, flags) {
     return `/${String(pattern).replaceAll('/', '\\/')}/${flags}`;
 }
 
+function isRisuAiOffCatchAllPattern(pattern) {
+    const normalized = String(pattern ?? '')
+        .replace(/\r\n|\r|\n/g, '\\n')
+        .replace(/[ \t\f\v]+/g, '');
+
+    return normalized === '^((?:.|(?<!{{AI_OFF.*?}})|\\n)*)$';
+}
+
+function normalizeRisuRegexPattern(pattern) {
+    if (isRisuAiOffCatchAllPattern(pattern)) {
+        return '^([\\s\\S]*)$';
+    }
+
+    return pattern;
+}
+
 /**
  * Converts SillyTavern regex scripts back to RisuAI customscript format
  * (used when exporting a character as .charx).
@@ -272,7 +288,7 @@ export function convertRisuCustomScripts(card) {
             const cbsPattern = flagMetadata.actions.includes('cbs')
                 ? getRisuCbsRegexPattern(script.in, card, flagMetadata.flags)
                 : null;
-            const findPattern = cbsPattern?.pattern ?? script.in;
+            const findPattern = normalizeRisuRegexPattern(cbsPattern?.pattern ?? script.in);
             const flags = cbsPattern?.hasZeroLengthVariant
                 ? (flagMetadata.flags.replace('g', '') || 'u')
                 : flagMetadata.flags;

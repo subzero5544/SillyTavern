@@ -108,6 +108,26 @@ export class RegexProvider {
     }
 }
 
+function isRisuAiOffCatchAllPattern(pattern) {
+    const normalized = String(pattern ?? '')
+        .replace(/\r\n|\r|\n/g, '\\n')
+        .replace(/[ \t\f\v]+/g, '');
+
+    return normalized === '^((?:.|(?<!{{AI_OFF.*?}})|\\n)*)$';
+}
+
+function normalizeRisuRegexString(input) {
+    const value = String(input ?? '');
+    const parts = value.match(/^\/([\s\S]*)\/([a-z]*)$/i);
+    const pattern = parts ? parts[1] : value;
+
+    if (!isRisuAiOffCatchAllPattern(pattern)) {
+        return value;
+    }
+
+    return parts ? `/^([\\s\\S]*)$/${parts[2]}` : '^([\\s\\S]*)$';
+}
+
 /**
  * Retrieves the list of regex scripts by combining the scripts from the extension settings and the character data
  *
@@ -758,7 +778,7 @@ export function runRegexScript(regexScript, rawString, { characterOverride, getL
                 return regexScript.findRegex;
         }
     };
-    const regexString = getRegexString();
+    const regexString = normalizeRisuRegexString(getRegexString());
     const findRegex = RegexProvider.instance.get(regexString);
 
     // The user skill issued. Return with nothing.
