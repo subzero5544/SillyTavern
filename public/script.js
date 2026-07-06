@@ -12806,7 +12806,6 @@ jQuery(async function () {
                 break;
             case 'import_character_info':
                 await importEmbeddedWorldInfo();
-                saveCharacterDebounced();
                 break;
             case 'character_source': {
                 const source = getCharacterSource(this_chid);

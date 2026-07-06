@@ -6041,7 +6041,7 @@ export async function importEmbeddedWorldInfo(skipPopup = false) {
 
     await saveWorldInfo(bookName, convertedBook, true);
     await updateWorldInfoList();
-    $('#character_world').val(bookName).trigger('change');
+    await charUpdatePrimaryWorld(bookName);
 
     toastr.success(t`The world '${bookName}' has been imported and linked to the character successfully.`, t`World/Lorebook imported`);
 
@@ -6614,7 +6614,6 @@ export function initWorldInfo() {
             openWorldInfoEditor(worldName);
         } else if (hasEmbed && !event.shiftKey && !event.altKey) {
             await importEmbeddedWorldInfo();
-            saveCharacterDebounced();
         } else {
             openSetWorldMenu();
         }
